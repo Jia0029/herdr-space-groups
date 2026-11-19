@@ -10,8 +10,8 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout } from "herdr";
-import { groupRows, nestWorktrees, splitName } from "./groups.js";
+import { spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout, notify } from "herdr";
+import { dropApplied, exceedsDragThreshold, groupRows, nestWorktrees, planDrop, releaseAction, rowPlacement, splitName } from "./groups.js";
 
 const FOLDED_GROUPS_KEY = "space-groups.folded";
 
@@ -69,8 +69,7 @@ export default class Spaces extends View {
     // worktree appears under its repo instead of jumping there.
     this.shown = new Set(spaces().map((s) => s.id));
     this.born = {};
-    this.pressed = null;
-    this.over = null;
+    this.drag = null;
     this.machines = [];
     this.reconnecting = JSON.parse(localStorage.getItem("machines.reconnecting") ?? "{}");
     for (const state of Object.values(this.reconnecting)) state.busy = false;
@@ -294,27 +293,111 @@ export default class Spaces extends View {
     return out.filter(r => this.shown.has(r.w.id));
   }
 
+  trackDrag(el, target) {
+    const key = `${target.kind}-${target.id}`;
+    const source = el.on_mouse_down("left", (e) => {
+      this.drag = { source: target, key, start: e.position, moved: false, over: null };
+    });
+    return this.trackDropTarget(source, target, key);
+  }
+
+  trackDropTarget(el, target, key) {
+    return el
+      .on_mouse_move((e, cx) => {
+        if (!this.drag) return;
+        cx.stop_propagation();
+        this.moveDrag(e, cx, target, key);
+      })
+      .on_mouse_up("left", (e, cx) => this.finishDrag(e, cx, target, key));
+  }
+
+  moveDrag(e, cx, target, key) {
+    const drag = this.drag;
+    if (!drag) return;
+    const wasMoving = drag.moved;
+    drag.moved ||= exceedsDragThreshold(drag.start, e.position);
+    if (!drag.moved) return;
+    const placement = target?.kind === "space" ? rowPlacement(e) : undefined;
+    if (target && drag.over?.key === key
+      && (placement === undefined || drag.over.after === (placement === "after"))) return;
+    const plan = target && planDrop(spaces(), drag.source, target, placement);
+    const next = plan ? { key, after: plan.expected.after } : null;
+    if (wasMoving && drag.over?.key === next?.key && drag.over?.after === next?.after) return;
+    drag.over = next;
+    cx.notify();
+  }
+
+  finishDrag(e, cx, target, key) {
+    const drag = this.drag;
+    if (!drag) return;
+    this.drag = null;
+    cx.stop_propagation();
+    cx.notify();
+    const action = releaseAction(drag, key, e.position);
+    if (action === "click") {
+      if (target.kind === "space") run("space.select", { id: target.id });
+      else this.toggleGroup(target.id);
+      return;
+    }
+    if (action !== "drop") return;
+    const placement = target.kind === "space" && drag.over?.key === key
+      ? (drag.over.after ? "after" : "before")
+      : undefined;
+    const plan = planDrop(spaces(), drag.source, target, placement);
+    if (!plan?.commands.length) return;
+    for (const { cmd, args } of plan.commands) run(cmd, args);
+    this.verifyDrop(plan.expected, Date.now() + 2000, cx);
+  }
+
+  toggleGroup(key) {
+    if (this.foldedGroups.has(key)) this.foldedGroups.delete(key);
+    else this.foldedGroups.add(key);
+    localStorage.setItem(FOLDED_GROUPS_KEY, JSON.stringify([...this.foldedGroups]));
+  }
+
+  cancelDrag(cx) {
+    if (!this.drag) return;
+    this.drag = null;
+    cx.notify();
+  }
+
+  verifyDrop(expected, deadline, cx) {
+    if (dropApplied(spaces(), expected)) return;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      notify({ title: "Space drop failed", body: "The requested name or order was not confirmed.", level: "error" });
+      return;
+    }
+    cx.timer.after(Math.min(100, remaining), (cx) => this.verifyDrop(expected, deadline, cx));
+  }
+
+  dropLine(t, after) {
+    return div().absolute().left(0).right(0).h(2).bg(t.accent)
+      .when(after, el => el.bottom(0))
+      .when(!after, el => el.top(0));
+  }
+
   groupHeading(entry, t) {
     const { key, name, rows, active, status } = entry;
     const folded = this.foldedGroups.has(key);
     const selected = folded && active;
-    return h_flex().id(`space-group-${key}`).h(26).flex_none().px(8).gap(7)
+    const dragKey = `group-${key}`;
+    const over = this.drag?.over?.key === dragKey ? this.drag.over : null;
+    const head = h_flex().relative().id(`space-group-${key}`).h(26).flex_none().px(8).gap(7)
       .items_center().rounded(7).text_size(11.5).text_color(selected ? t.foreground : t.muted)
       .cursor_pointer()
       .when(selected, el => el.bg(t.selected))
       .when(!selected, el => el.hover(s => s.bg(t.hover)))
-      .on_click((_e, cx) => {
-        if (this.foldedGroups.has(key)) this.foldedGroups.delete(key);
-        else this.foldedGroups.add(key);
-        localStorage.setItem(FOLDED_GROUPS_KEY, JSON.stringify([...this.foldedGroups]));
-        cx.notify();
-      })
+      .when(this.drag?.moved && this.drag.key === dragKey, el => el.opacity(0.5))
+      .when(Boolean(over), el => el.border_1().border_color(t.accent))
+      .when(over && this.drag.source.kind === "group", el => el.child(this.dropLine(t, over.after)))
       .child(svg(`mods/workspace-chrome/chevron-${folded ? "right" : "down"}.svg`).size(11).flex_none())
       .child(div().flex_1().min_w(0).truncate().font_semibold().child(name || "(empty group)"))
       .child(div().flex_none().text_color(selected ? t.muted : t.dim).child(String(rows.length)))
       .when(folded && status !== null, el => el.child(
         div().flex_none().text_color(tone(t, status)).tooltip(status).child(glyph(status)),
       ));
+    return this.trackDrag(head, { kind: "group", id: key });
   }
 
   spaceRows(rows, t, collapsed) {
@@ -324,6 +407,22 @@ export default class Spaces extends View {
       const head = this.groupHeading(entry, t);
       return this.foldedGroups.has(entry.key) ? [head] : [head, ...entry.rows.map(r => this.row(r, t, true))];
     });
+  }
+
+  edgeZone(machine, edge, t) {
+    const key = `edge-${edge}-${JSON.stringify(machine)}`;
+    const over = this.drag.over?.key === key;
+    const zone = h_flex().id(key).h(18).flex_none().items_center().justify_center()
+      .rounded(4).border_1().border_dashed().border_color(over ? t.accent : t.border)
+      .text_size(10).text_color(over ? t.accent : t.dim)
+      .when(over, el => el.bg(t.hover))
+      .child(edge === "top" ? "Move to top" : "Move to end");
+    return this.trackDropTarget(zone, { kind: "edge", machine, edge }, key);
+  }
+
+  withEdgeZones(rows, machine, t, collapsed) {
+    if (collapsed || !this.drag?.moved) return rows;
+    return [this.edgeZone(machine, "top", t), ...rows, this.edgeZone(machine, "end", t)];
   }
 
   // The rows, under a header per machine once one isn't this computer.
@@ -336,7 +435,10 @@ export default class Spaces extends View {
         || spaces().some(s => (s.machine ?? null) === m && !this.shown.has(s.id));
     };
     const loadingRow = m => h_flex().id(`machine-loading-${m ?? "local"}`).h(28).flex_none().px(collapsed ? 0 : 8).items_center().when(collapsed, el => el.justify_center()).text_size(12).text_color(t.dim).child(collapsed ? "…" : "Loading…");
-    if (!remote.length) return loading(null) && !rows.length ? [loadingRow(null)] : this.spaceRows(rows, t, collapsed);
+    if (!remote.length) {
+      const localRows = loading(null) && !rows.length ? [loadingRow(null)] : this.spaceRows(rows, t, collapsed);
+      return this.withEdgeZones(localRows, null, t, collapsed);
+    }
     const machineNames = [null, ...remote];
     return machineNames.flatMap((m) => {
       const mine = rows.filter((r) => (r.w.machine ?? null) === m);
@@ -346,11 +448,13 @@ export default class Spaces extends View {
       const rebuilt = this.rebuilt(machine) || !!repair;
       const login = machine?.state === "needs_login" ? `hc machine login ${m}` : null;
       const folded = this.folded.has(m);
+      const dropKey = `machine-top-${JSON.stringify(m)}`;
       const icon = svg(`mods/workspace-chrome/${m ? "server" : "monitor"}.svg`).size(13).flex_none();
       const badge = div().absolute().right(-3).bottom(-2).size(6).rounded(3).border_1().border_color(t.chrome).bg(connected ? t.ansi2 : t.dim);
       const head = h_flex().id(`machine-${m ?? "local"}`).h(26).flex_none().px(collapsed ? 0 : 8).gap(7).items_center().text_size(11).text_color(t.dim)
         .when(collapsed, el => el.mt(4).w(RAIL_CELL).justify_center().rounded(6).tooltip(login ? `${m} needs a login: run ${login}. Click for Copy.` : m ? `${m} · ${connected ? "connected" : (machine?.state ?? "asleep").replace(/_/g, " ")}` : "This computer"))
         .cursor_pointer().hover(s => s.bg(t.hover))
+        .when(!collapsed && this.drag?.over?.key === dropKey, el => el.border_1().border_color(t.accent))
         .on_click((_e, cx) => {
           if (collapsed && login) { run("app.settings", { section: "machines" }); return; }
           folded ? this.folded.delete(m) : this.folded.add(m);
@@ -372,6 +476,7 @@ export default class Spaces extends View {
             .on_click((_e, cx) => { cx.stop_propagation(); run("space.new", { machine: m ?? "" }); }).child("+")))
           .child(div().size(6).rounded(3).flex_none().bg(connected ? t.ansi2 : t.dim))
           .child(svg(`mods/workspace-chrome/chevron-${folded ? "right" : "down"}.svg`).size(11).flex_none()));
+      const machineHead = collapsed ? head : this.trackDropTarget(head, { kind: "edge", machine: m, edge: "top" }, dropKey);
       const empty = h_flex().id(`machine-new-${m ?? "local"}`).h(28).flex_none().px(collapsed ? 0 : 8).gap(7).items_center().rounded(7)
         .text_size(12).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
         .on_click(() => run("space.new", { machine: m ?? "" }))
@@ -379,7 +484,7 @@ export default class Spaces extends View {
           .child(h_flex().size(18).rounded(5).border_1().border_color(t.dim).items_center().justify_center()
             .child(svg("mods/workspace-chrome/plus.svg").size(10))))
         .when(!collapsed, el => el.child(svg("mods/workspace-chrome/plus.svg").size(12)).child("New space there"));
-      if (!collapsed && rebuilt) return [head];
+      if (!collapsed && rebuilt) return [machineHead];
       const cell = collapsed ? railCell : (el) => el;
       const guidance = !collapsed && login ? [v_flex().px(8).pb(6).gap(3).flex_none()
         .child(div().text_size(11).text_color(t.blocked).child("needs a login: run"))
@@ -389,7 +494,9 @@ export default class Spaces extends View {
             .text_size(11).text_color(t.foreground).bg(t.raised).cursor_pointer().hover(s => s.bg(t.hover))
             .on_click((_e, cx) => { cx.stop_propagation(); cx.write_to_clipboard(login); this.copiedLogin = login; cx.notify(); })
             .child(this.copiedLogin === login ? "Copied" : "Copy")))] : [];
-      return [cell(head), ...guidance, ...(folded ? [] : mine.length ? this.spaceRows(mine, t, collapsed) : [loading(m) ? loadingRow(m) : cell(empty)])];
+      if (folded) return [cell(machineHead), ...guidance];
+      const spaceRows = mine.length ? this.spaceRows(mine, t, collapsed) : [loading(m) ? loadingRow(m) : cell(empty)];
+      return [cell(machineHead), ...guidance, ...this.withEdgeZones(spaceRows, m, t, collapsed)];
     });
   }
 
@@ -415,13 +522,14 @@ export default class Spaces extends View {
       .when(g.behind > 0, (el) => el.child(div().flex_none().text_color(t.ansi1).child(`\u2193${g.behind}`)));
   }
 
-  row({ w, i, g, tree, label }, t, inGroup = false) {
+  row({ w, g, tree, label }, t, inGroup = false) {
     const on = w.active;
-    const fromIndex = this.pressed === null ? -1 : spaces().findIndex(s => s.id === this.pressed);
+    const dragKey = `space-${w.id}`;
+    const over = this.drag?.over?.key === dragKey ? this.drag.over : null;
     const colors = shared("space.colors") ?? {};
     const color = colors[w.id] ?? "ansi6";
     const fill = color.startsWith("#") ? color : (MARK[color] ?? t[color]);
-    return v_flex()
+    const row = v_flex()
       .relative()
       .id(`space-${w.id}`)
       .px(8)
@@ -432,35 +540,8 @@ export default class Spaces extends View {
       .rounded(8)
       .when(on, (el) => el.bg(t.selected))
       .when(!on, (el) => el.hover((s) => s.bg(t.hover)))
-      .when(this.pressed === w.id && this.over !== w.id, (el) => el.opacity(0.5))
-      .when(this.pressed !== null && this.over === w.id && this.pressed !== w.id, (el) => el.child(
-        div().absolute().left(0).right(0).h(2).bg(t.accent)
-          .when(fromIndex < i, line => line.bottom(0))
-          .when(fromIndex > i, line => line.top(0)),
-      ))
-      .on_mouse_down("left", () => {
-        this.pressed = w.id;
-        this.over = w.id;
-      })
-      .on_mouse_move((_e, cx) => {
-        const source = spaces().find(s => s.id === this.pressed);
-        const over = source && (source.machine ?? null) === (w.machine ?? null) ? w.id : null;
-        if (this.pressed !== null && this.over !== over) {
-          this.over = over;
-          cx.notify();
-        }
-      })
-      .on_mouse_up("left", (_e, cx) => {
-        const from = this.pressed;
-        const over = this.over;
-        this.pressed = null;
-        this.over = null;
-        if (from !== null && over === w.id && from !== w.id) {
-          const index = spaces().findIndex(s => s.id === w.id);
-          if (index !== -1) run("space.move", { id: from, index: index + 1 });
-        } else if (from === w.id) run("space.select", { id: w.id });
-        cx.notify();
-      })
+      .when(this.drag?.moved && this.drag.key === dragKey, el => el.opacity(0.5))
+      .when(Boolean(over), el => el.child(this.dropLine(t, over.after)))
       .on_mouse_down("right", () => this.menu(w))
       .child(
         h_flex()
@@ -471,6 +552,7 @@ export default class Spaces extends View {
           .child(div().when(!inGroup, el => el.flex_shrink(0)).min_w(0).max_w(150).truncate().text_color(t.foreground).child(label))
           .child(g ? this.gitTail(g, tree, label, t) : div().flex_1()),
       );
+    return this.trackDrag(row, { kind: "space", id: w.id });
   }
 
   compact({ w, i }, t) {
@@ -510,8 +592,10 @@ export default class Spaces extends View {
         .when(!collapsed, el => el.child("Spaces"))
         .child(div().id("space-new").size(26).flex_none().flex().items_center().justify_center().rounded(6).hover(s => s.bg(t.hover).text_color(t.foreground))
           .on_click(() => run("space.new")).child(svg("mods/workspace-chrome/plus.svg").size(14))))
-      .child(v_flex().flex_1().min_h(0).px(collapsed ? 0 : 8).pb(14).overflow_y_scrollbar().mode("always")
-        .on_mouse_up("left", (_e, cx) => { this.pressed = null; cx.notify(); })
+      .child(v_flex().id("space-list").flex_1().min_h(0).px(collapsed ? 0 : 8).pb(14).overflow_y_scrollbar().mode("always")
+        .on_mouse_move((e, cx) => this.moveDrag(e, cx, null, null))
+        .on_mouse_up("left", (_e, cx) => this.cancelDrag(cx))
+        .on_hover((inside, cx) => { if (!inside) this.cancelDrag(cx); })
         .children(this.grouped(t, collapsed)));
   }
 }

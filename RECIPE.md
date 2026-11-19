@@ -21,6 +21,10 @@ attention.
   14 px of extra left padding. Worktrees have another 22 px and a branch
   icon. Other rows have the built-in 18 px colored avatar. Git details appear
   to the right when relevant.
+- During a drag in the expanded sidebar, unfolded machine sections show
+  18 px dashed **Move to top** and **Move to end** zones. The single-machine
+  list shows the same zones without a machine heading. Valid hover targets
+  use the theme's accent.
 - Below 160 logical px, the sidebar shows the built-in 32 px wide numbered
   rail cells with machine icons and per-space status glyphs.
 
@@ -34,15 +38,32 @@ attention.
   idle. Blocked and done use a filled dot in the corresponding theme color.
   Working and idle use a middle dot in their theme colors. Hover the glyph
   for the status name. A group with no reported status has no glyph.
-- Click a space to select it, right-click for its space menu, or drag it
-  onto another visible space on the same machine to reorder. A group's
-  position follows its first member. A repo and its linked worktrees nest
-  together when they share a group. Changing a space's name can change
-  its group.
+- Click a space to select it or right-click for its menu. Drag a space to
+  a heading to append it to that group, even if folded. Hover over a space
+  row's upper or lower half to put the insertion line before or after it.
+  Release to insert at the displayed line. The name gains or replaces its
+  prefix on entry into a group. Automatic names become explicit names. A drop on a
+  standalone row removes the first prefix when the display name is nonempty.
+- Drag a heading to move its entire group before or after the target
+  without changing names. The dragged row or heading becomes translucent.
+  Target headings get an accent outline and row targets get an accent
+  insertion line. Drops onto another item leave the fold state as it was.
+  Pressing and releasing on the same item counts as a click, even if the
+  pointer moved away in between. The drag starts after the pointer moves
+  more than 4 logical pixels along either axis.
+- Drag and drop works within one machine. Dropping a group on its own
+  members does nothing. Herdr shows an error if the resulting name or order
+  cannot be confirmed in about two seconds.
+- Drop on either zone to move to the first or last position of that
+  machine's space list. A machine heading acts as a top drop target.
+  At these targets a space loses its first prefix if the display name is
+  nonempty, and automatic names stay automatic. Groups keep their names
+  and member order. The zones disappear when the drag ends.
 - The rail gives every space a numbered selection cell, including members
   hidden by prefix folds in the wider sidebar. Machine headings still
   fold their entire machine in both widths. Widening the sidebar restores
-  the previous prefix folds. Existing Herdr shortcuts still work.
+  the previous prefix folds. Group drops are available in the expanded
+  sidebar. Existing Herdr shortcuts still work.
 
 ## Built from
 
@@ -63,6 +84,14 @@ attention.
   parts. Use the pair of machine name and prefix as the group identity.
   Keep the folded keys as a JSON array in this mod copy's `localStorage`
   at `space-groups.folded`.
+- Plan drops from the current `spaces()` order. Use `run("space.rename", {id, name})`
+  for a membership change and `run("space.move", {id, index})` for each move.
+  Simulate each move before computing the next 1-based index. Use
+  `cx.timer.after()` with a short deadline to verify the live name and order,
+  and `notify()` for an unconfirmed drop.
+- Route the two edge zones and the machine heading through the same
+  `planEdgeDrop()` logic, with `edge: "top"` for the heading. Confirm
+  placement at the actual edge of the machine's live space order.
 
 ## Watch out
 
@@ -72,8 +101,10 @@ attention.
   name. Grouped worktree nesting is a display rule so it need not shuffle
   other groups. Keep the shipped ordering behavior for ungrouped worktrees.
 - Use the underlying space index for drag destinations and rail numbering.
-  A drag target must be visible. Group headers cannot be dragged or used
-  as drop targets.
+  A drag target must be visible. A folded heading still represents all of
+  its hidden members when computing the insertion point. Worktree nesting
+  can affect the visible order. A remaining middle dot after prefix
+  removal is still interpreted as a group separator.
 - Machine folding and prefix folding are separate. Never put prefix fold
   state in shared space data. The client needs a Herdr version with the
   shipped menu and icon paths used by the 0.1.15 baseline.
@@ -85,7 +116,12 @@ attention.
   unprefixed or automatically named space stays outside the headings.
 - Folding a group leaves the count, highest-priority status, and selected
   highlight visible. Closing and reopening the same layout retains the fold.
-- Selecting, opening a context menu and dragging visible rows work. A
-  same-group worktree nests beneath its repo and displays its Git details.
+- Selecting and opening a context menu work. A space can enter a folded
+  group, enter another group at a visible member, reorder within a group
+  or leave at a standalone row. A heading can move the whole group.
+- A same-group worktree nests beneath its repo and displays its Git details.
 - Narrowing the sidebar reveals the rail entries even for folded groups.
   Widening it restores the folds.
+- A fully grouped machine can accept a space at either list edge. A group
+  can move intact to either edge. The machine heading acts as the top
+  zone. Folded machine sections and the rail show no edge zones.
