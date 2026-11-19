@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { dropApplied, endDropTarget, exceedsDragThreshold, groupRows, nestWorktrees, planDrop, planEdgeDrop, releaseAction, rowPlacement, splitName } from "../mods/space-groups/groups.js";
+import { dropApplied, endDropTarget, exceedsDragThreshold, findNewSpace, groupRows, namesApplied, nestWorktrees, orderMachines, planDrop, planEdgeDrop, planIntoGroup, planMachineMove, planRenameGroup, planUngroup, releaseAction, rowPlacement, splitName, validateGroupName, wideSpaceList } from "../mods/space-groups/groups.js";
 
 function row(id, name, options = {}) {
   const { machine = null, named = true, g = null, status = null, active = false } = options;
@@ -354,4 +354,84 @@ test("拖动时仅来源机器有末尾放置区，单机也只生成 end", () =
     assert.deepEqual(targets, [{ kind: "edge", machine: source, edge: "end" }]);
   }
   assert.equal(endDropTarget(undefined, null), null);
+});
+
+test("滚动索引计入标题、展开成员与单独空间，并定位到当前空间行", () => {
+  const rows = [row("a", "学习·a"), row("plain", "普通"), row("b", "学习·b", { active: true })];
+  const list = wideSpaceList(rows, new Set());
+  assert.deepEqual(list.entries.map(e => e.kind === "group" ? e.name : e.row.w.id), ["学习", "a", "b", "plain"]);
+  assert.equal(list.activeAt, 2);
+  assert.equal(list.entries[list.activeAt].inGroup, true);
+  const activeStandalone = wideSpaceList([row("a", "学习·a"), row("plain", "普通", { active: true })], new Set());
+  assert.equal(activeStandalone.activeAt, 2);
+});
+
+test("当前空间藏在折叠组时滚动到组标题，没有当前空间时不滚动", () => {
+  const rows = [row("plain", "普通"), row("a", "学习·a", { active: true }), row("b", "学习·b")];
+  const folds = new Set([JSON.stringify([null, "学习"])]);
+  const list = wideSpaceList(rows, folds);
+  assert.equal(list.entries.length, 2);
+  assert.equal(list.activeAt, 1);
+  assert.equal(list.entries[list.activeAt].kind, "group");
+  assert.equal(wideSpaceList([row("none", "学习·a")], folds).activeAt, -1);
+});
+
+test("机器默认远程按名排序、本机最后，按已保存顺序合并新机器", () => {
+  assert.deepEqual(orderMachines([null,"zeta","alpha","alpha"]), ["alpha","zeta",null]);
+  assert.deepEqual(orderMachines([null,"zeta","alpha","beta","charlie"], ["zeta","","alpha","missing","zeta"]),
+    ["zeta","beta","charlie",null,"alpha"]);
+  assert.deepEqual(orderMachines(["zeta",null], null), ["zeta",null]);
+});
+
+test("机器标题可按上半区或下半区移动，并以空字符串保存本机", () => {
+  const machines = [null,"alpha","beta"];
+  assert.deepEqual(planMachineMove(machines, [], null, "alpha", "before"), ["","alpha","beta"]);
+  assert.deepEqual(planMachineMove(machines, ["","alpha","beta"], "alpha", "beta", "after"), ["","beta","alpha"]);
+  assert.equal(planMachineMove(machines, [], "beta", "beta", "after"), null);
+  assert.equal(planMachineMove(machines, [], "offline", null, "before"), null);
+});
+
+test("校验名称时去首尾空格，并拒绝空名和中点", () => {
+  assert.deepEqual(validateGroupName("  学习  "), {name:"学习"});
+  assert.ok(validateGroupName("  ").error);
+  assert.ok(validateGroupName("学习·anki").error);
+});
+
+test("重命名只处理同机已命名的成员，可合并到同名组", () => {
+  const spots = [space("a","A·a"),space("b","A·b·detail"),space("old","B·old"),
+    space("auto","A·auto",null,false),space("remote","A·remote","remote")];
+  const plan = planRenameGroup(spots,null,"A"," B ");
+  assert.deepEqual(plan.commands, [rename("a","B·a"),rename("b","B·b·detail")]);
+  assert.equal(namesApplied(spots, plan.names), false);
+  const updated = spots.map(s => ({...s, name:plan.names.find(n => n.id === s.id)?.name ?? s.name}));
+  assert.equal(namesApplied(updated, plan.names), true);
+  assert.deepEqual(ids(groupRows(updated.map(w => ({w})))[0].rows), ["a","b","old"]);
+  assert.equal(planRenameGroup(spots,null,"A","B·bad"), null);
+});
+
+test("取消分组保留空显示名、自动名称和其他机器的空间", () => {
+  const spots = [space("a","A·a"),space("empty","A· "),space("auto","A·auto",null,false),space("remote","A·remote","remote")];
+  assert.deepEqual(planUngroup(spots,null,"A").commands, [rename("a","a")]);
+  assert.equal(planUngroup(spots,null,"B"), null);
+});
+
+test("仅识别同机唯一、当前选中且未命名的新空间", () => {
+  const before = new Set(["old"]);
+  const candidate = {...space("new","~","remote",false),active:true};
+  const spots = [space("old","旧","remote"),space("local","本机"),candidate];
+  assert.equal(findNewSpace(before,spots,"remote"),candidate);
+  assert.equal(findNewSpace(before,spots,null),null);
+  assert.equal(findNewSpace(before,[...spots,space("extra","新","remote")],"remote"),null);
+  assert.equal(findNewSpace(before,[{...candidate,active:false}],"remote"),null);
+});
+
+test("新空间改名并放在最后一名组员后，只有 rename 或 move", () => {
+  const spots = [space("a","A·a"),space("gap"),space("b","A·b"),space("other"),
+    {...space("new","folder·branch",null,false),active:true}];
+  const plan = planIntoGroup(spots,"new",null,"A");
+  assert.deepEqual(plan.commands, [rename("new","A·folder·branch"),move("new",4)]);
+  applyDrop(spots,plan,["a","gap","b","new","other"]);
+  assert.deepEqual(planIntoGroup(spots,"new",null,"Z").commands, [rename("new","Z·folder·branch")]);
+  assert.equal(planIntoGroup(spots,"new","remote","A"),null);
+  assert.equal(planIntoGroup(spots,"a",null,"Z"),null);
 });

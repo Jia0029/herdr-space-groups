@@ -3,6 +3,43 @@
 const SEP = "·";
 const DRAG_THRESHOLD = 4;
 
+// Keep the machine-order key and ordering rules identical in both mods.
+export const MACHINE_ORDER_KEY = "space-groups.machine-order";
+
+export function orderMachines(names, saved) {
+  const available = new Set(names);
+  const order = new Set();
+  for (const key of Array.isArray(saved) ? saved : []) {
+    if (typeof key !== "string") continue;
+    const name = key === "" ? null : key;
+    order.add(name);
+  }
+  if (available.has(null)) order.add(null);
+  const missing = [...available].filter(name => name !== null && !order.has(name)).sort();
+  const savedOrder = [...order];
+  const localAt = savedOrder.indexOf(null);
+  savedOrder.splice(localAt < 0 ? savedOrder.length : localAt, 0, ...missing);
+  return savedOrder.filter(name => available.has(name));
+}
+
+export function agentMachine(agent, space) {
+  if (space) return space.machine ?? null;
+  const slash = agent.address.indexOf("/");
+  return slash < 0 ? null : agent.address.slice(0, slash);
+}
+
+export function machineSections(groups, saved) {
+  const buckets = new Map();
+  for (const group of groups) {
+    if (!buckets.has(group.machine)) buckets.set(group.machine, []);
+    buckets.get(group.machine).push(group);
+  }
+  return orderMachines(buckets.keys(), saved).map(machine => ({
+    machine, groups: buckets.get(machine),
+    title: buckets.size > 1 ? machine ?? "This computer" : null,
+  }));
+}
+
 // Keep this split consistent with space-groups/groups.js. Each mod installs independently.
 export function splitName(space) {
   const name = space?.name ?? "";
@@ -23,7 +60,7 @@ export function groupAgents(agents, spaceById) {
     const id = spaceGroupId(space, agent.space, group);
     if (!groups.has(id)) {
       const label = group === null ? agent.space_name || space?.name || "" : group || "(empty group)";
-      groups.set(id, { id, label, status: null, members: [] });
+      groups.set(id, { id, label, status: null, machine: agentMachine(agent, space), members: [] });
     }
     groups.get(id).members.push(agent);
   }

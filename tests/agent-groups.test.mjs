@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { exceedsDragThreshold, groupAgents, groupMoveApplied, hasNewAttention, planGroupMove, rowPlacement, splitName, toggleGroupFold, trackAgentState } from "../mods/agent-groups/agentgroups.js";
+import { exceedsDragThreshold, groupAgents, groupMoveApplied, hasNewAttention, machineSections, orderMachines, planGroupMove, rowPlacement, splitName, toggleGroupFold, trackAgentState } from "../mods/agent-groups/agentgroups.js";
+import { orderMachines as orderSpaceMachines } from "../mods/space-groups/groups.js";
 
 const space = (id, name, { machine = null, named = true } = {}) => ({ id, name, machine, named });
 const agent = (address, s) => ({ address, space: s.id, space_name: s.name });
@@ -164,4 +165,18 @@ test("Agents 拖动阈值和半区与 Spaces 一致", () => {
   assert.equal(rowPlacement({ local_position: { y: 14 }, bounds: { height: 30 } }), "before");
   assert.equal(rowPlacement({ local_position: { y: 15 }, bounds: { height: 30 } }), "after");
   assert.equal(rowPlacement({}), undefined);
+});
+
+test("Agents 多机按 Spaces 的共享机器顺序分块，单机省略标题", () => {
+  const local = space("s1","学习·本机");
+  const remote = space("remote/s2","学习·远程",{machine:"remote"});
+  const other = space("other/s3","普通");
+  const groups = groupAgents([agent("local",local),agent("remote/t",remote),agent("other/t",other)], index(local,remote));
+  const defaults = machineSections(groups);
+  assert.deepEqual(defaults.map(s => s.title), ["other","remote","This computer"]);
+  assert.deepEqual(machineSections(groups, ["remote","","other"]).map(s => s.machine), ["remote",null,"other"]);
+  assert.deepEqual(machineSections(groups.slice(1), ["","remote"]).map(s => s.machine), ["other","remote"]);
+  assert.equal(machineSections([groups[1]])[0].title,null);
+  assert.equal(planGroupMove([local,remote],groups[0].id,groups[1].id,"after"),null);
+  assert.deepEqual(orderMachines([null,"remote","other"], ["other",""]), orderSpaceMachines([null,"remote","other"], ["other",""]));
 });

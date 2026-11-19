@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.1
+
+- Add a Spaces toggle to the wide Agents toolbar. Its chevron points up to
+  hide Spaces and down to show it when visibility is available. Document
+  keyboard shortcuts for macOS and Windows.
+
+## 0.5.0
+
+- Default to remote machines first and keep draggable machine order per client.
+- Show matching machine sections in the grouped Agents view.
+- Add Spaces header menus for renaming, ungrouping and creating groups or spaces.
+
+## 0.4.0
+
+- Rebase both mods on the built-in panels in Herdr 0.1.16, the new
+  minimum supported release.
+- Scroll the active space or its folded group heading into view.
+  Improve Git refresh limits, stale watch cleanup, and small-width labels.
+- Preserve meaningful brackets and quotes in Agents titles and recover
+  from invalid stored panel state.
+
 ## 0.3.1
 
 - Show only the source machine's end drop zone in Spaces. A machine

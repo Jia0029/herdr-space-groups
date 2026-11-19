@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Adapted from the Herdr 0.1.15 built-in agents mod (github.com/herdrdev/herdr-app).
+// Adapted from the Herdr 0.1.16 built-in agents mod (github.com/herdrdev/herdr-app).
 // Changes: per-machine space-prefix groups, short space labels, persistent
 // group folds and an attention dot for new done/blocked states. See NOTICE.
 //
@@ -8,7 +8,7 @@
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, notify } from "herdr";
-import { exceedsDragThreshold, groupAgents, groupMoveApplied, hasNewAttention, planGroupMove, rowPlacement, splitName, toggleGroupFold, trackAgentState } from "./agentgroups.js";
+import { exceedsDragThreshold, groupAgents, groupMoveApplied, hasNewAttention, machineSections, MACHINE_ORDER_KEY, planGroupMove, rowPlacement, splitName, toggleGroupFold, trackAgentState } from "./agentgroups.js";
 
 const SORT_KEY = "agent-groups.sort";
 const FOLDED_KEY = "agent-groups.folded";
@@ -34,7 +34,10 @@ function toggleSidebar() {
   run("layout.resize", { id: "sidebar", px: narrow() ? (shared("sidebar.width") ?? 268) : window()?.platform === "macos" ? 76 : 44 });
 }
 
-const clean = (s) => (s ?? "").replace(/^[^\p{L}\p{N}]+/u, "").trim();
+// Drops what an agent puts before its title: a status glyph or spinner and the separator
+// after it ("✦  Working", "⠋ - Thinking"), and Codex's blinking "[ ! ] " / "[ . ] " mark.
+// Stops at an opening bracket or quote, so a title that starts with one ("[web] login") keeps it.
+const clean = (s) => (s ?? "").replace(/^[^\p{L}\p{N}\p{Ps}\p{Pi}]+/u, "").replace(/^\[ [!.] \] /, "").trim();
 
 function leadPanes(all) {
   const leads = new Map();
@@ -52,7 +55,7 @@ function title(tab, l) {
   const live = clean(l?.title);
   // clean() would strip a path's leading ~ or /: test the title with only its status glyph gone.
   const path = /^[~/]|^[A-Za-z]:\\/.test((l?.title ?? "").replace(/^[^\p{L}\p{N}~/]+/u, ""));
-  const telling = live && live !== prog && !path && !live.includes("@") && live.toLowerCase() !== l?.program?.key;
+  const telling = live && live !== (l?.terminal ?? l?.address) && live !== prog && !path && !live.includes("@") && live.toLowerCase() !== l?.program?.key;
   return (tab.name === prog || !tab.named) && telling ? live : tab.name;
 }
 const RANK = { blocked: 4, done: 3, working: 2, idle: 1 };
@@ -88,11 +91,13 @@ export default class Agents extends View {
   init(_props, cx) {
     if (props()?.sortMenu) return;
     this.folded = new Set();
-    this.foldedAt = new Map(JSON.parse(localStorage.getItem(FOLDED_KEY) ?? "[]"));
+    try { this.foldedAt = new Map(JSON.parse(localStorage.getItem(FOLDED_KEY) ?? "[]")); } catch { this.foldedAt = new Map(); }
     this.drag = null;
     // Each agent's last state and when it changed (ms), kept across restarts.
-    this.changed = JSON.parse(localStorage.getItem("changed") ?? "{}");
-    this.pendingPins = JSON.parse(localStorage.getItem("pins") ?? "[]");
+    try { this.changed = JSON.parse(localStorage.getItem("changed") ?? "{}"); } catch { this.changed = {}; }
+    if (!this.changed || typeof this.changed !== "object" || Array.isArray(this.changed)) this.changed = {};
+    try { this.pendingPins = JSON.parse(localStorage.getItem("pins") ?? "[]"); } catch { this.pendingPins = []; }
+    if (!Array.isArray(this.pendingPins)) this.pendingPins = [];
     if (!this.pendingPins.length) localStorage.removeItem("pins");
     this.migratingPins = new Set();
     cx.timer.every(30000, (cx) => cx.notify());
@@ -290,6 +295,8 @@ export default class Agents extends View {
     const t = theme();
     if (props()?.sortMenu) return this.sortMenu(t);
     const collapsed = narrow();
+    const spacesBlock = collapsed ? null : find(layout(), "spaces");
+    const spacesHidden = spacesBlock?.hidden;
     const sort = sortOf();
     let list = agents();
     this.listed = new Map(list.map((a) => [a.address, a.status]));
@@ -454,6 +461,7 @@ export default class Agents extends View {
 
     // A prefix group stays at its first agent even if its spaces are interleaved.
     const groups = pinned.length ? [{ id: "pinned", label: "Pinned", status: null, members: pinned }] : [];
+    const machineTitles = new Map();
     if (byPriority) {
       for (const a of rest) {
         const r = rankOf(a) || RANK.idle;
@@ -461,8 +469,12 @@ export default class Agents extends View {
         if (groups.at(-1)?.id === id) groups.at(-1).members.push(a);
         else groups.push({ id, label: SECTION[r], status: SECTION_STATUS[r], members: [a] });
       }
-    } else {
-      groups.push(...groupAgents(rest, spaceById));
+    } else if (!collapsed) {
+      const sections = machineSections(groupAgents(rest, spaceById), shared(MACHINE_ORDER_KEY));
+      for (const [i, section] of sections.entries()) {
+        if (section.title) machineTitles.set(section.groups[0].id, { ...section, divided: i > 0 });
+        groups.push(...section.groups);
+      }
     }
     setAgentOrder((collapsed ? list : groups.flatMap((g) => g.members)).map((a) => a.address));
 
@@ -508,11 +520,17 @@ export default class Agents extends View {
     };
     const rows = collapsed
       ? list.flatMap(withKids)
-      : groups.flatMap((g, i) => [
-        ...(i === 0 ? [] : [div().h(1).flex_none().mt(5).mx(8).bg(t.border)]),
-        header(g),
-        ...(this.foldedAt.has(g.id) ? [] : g.members.flatMap(withKids)),
-      ]);
+      : groups.flatMap((g, i) => {
+        const machine = machineTitles.get(g.id);
+        const items = [];
+        if (machine?.divided) items.push(div().w_full().h(1).flex_none().mt(8).mb(4).bg(t.border));
+        if (machine) items.push(div().id(`agent-machine-${JSON.stringify(machine.machine)}`)
+          .h(22).flex_none().px(8).pt(5).truncate().text_size(10.5).text_color(t.muted).child(machine.title));
+        if (i > 0 && !machine?.divided) items.push(div().h(1).flex_none().mt(5).mx(8).bg(t.border));
+        items.push(header(g));
+        if (!this.foldedAt.has(g.id)) items.push(...g.members.flatMap(withKids));
+        return items;
+      });
 
     return v_flex()
       .size_full()
@@ -532,15 +550,25 @@ export default class Agents extends View {
             .items_center()
             .justify_between()
             .child(div().text_size(11.5).font_medium().text_color(t.dim).child("Agents"))
-            .child(
-              div()
+            .child(h_flex().items_center().gap(10)
+              .when(Boolean(spacesBlock), el => el.child(div()
+                .id("ag-toggle-spaces")
+                .text_color(spacesHidden === true ? t.dim : t.muted)
+                .cursor_pointer()
+                .hover(s => s.text_color(t.foreground))
+                .tooltip(spacesHidden === true ? "Show Spaces" : spacesHidden === false ? "Hide Spaces" : "Show/hide Spaces")
+                .on_click(() => run("layout.toggle", { id: "spaces" }))
+                .child(svg(spacesHidden === true
+                  ? "mods/workspace-chrome/chevron-down.svg"
+                  : "mods/agent-groups/chevron-up.svg").size(14))))
+              .child(div()
                 .id("ag-sort")
                 .text_size(11)
                 .text_color(t.dim)
                 .hover((s) => s.text_color(t.foreground))
                 .on_click(() => openOverlay({ mod: "agent-groups", kind: "popup", width: 200, height: 140, props: { sortMenu: true } }))
                 .tooltip(`Sort agents: ${sort.label}`)
-                .child(svg(`mods/workspace-chrome/${sort.icon}.svg`).size(14)),
+                .child(svg(`mods/workspace-chrome/${sort.icon}.svg`).size(14))),
             ),
         ),
       )

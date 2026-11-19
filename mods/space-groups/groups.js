@@ -4,6 +4,34 @@ export const SEP = "·";
 const DRAG_THRESHOLD = 4;
 const STATUS_PRIORITY = ["blocked", "done", "working", "idle"];
 
+// Keep the machine-order key and ordering rules identical in both mods.
+export const MACHINE_ORDER_KEY = "space-groups.machine-order";
+
+export function orderMachines(names, saved) {
+  const available = new Set(names);
+  const order = new Set();
+  for (const key of Array.isArray(saved) ? saved : []) {
+    if (typeof key !== "string") continue;
+    const name = key === "" ? null : key;
+    order.add(name);
+  }
+  if (available.has(null)) order.add(null);
+  const missing = [...available].filter(name => name !== null && !order.has(name)).sort();
+  const savedOrder = [...order];
+  const localAt = savedOrder.indexOf(null);
+  savedOrder.splice(localAt < 0 ? savedOrder.length : localAt, 0, ...missing);
+  return savedOrder.filter(name => available.has(name));
+}
+
+export function planMachineMove(names, saved, source, target, placement) {
+  const order = orderMachines(names, saved);
+  if (source === target || !order.includes(source) || !order.includes(target)
+    || (placement !== "before" && placement !== "after")) return null;
+  order.splice(order.indexOf(source), 1);
+  order.splice(order.indexOf(target) + (placement === "after" ? 1 : 0), 0, source);
+  return order.map(name => name ?? "");
+}
+
 export function exceedsDragThreshold(start, position) {
   return Math.max(Math.abs(position.x - start.x), Math.abs(position.y - start.y)) > DRAG_THRESHOLD;
 }
@@ -41,6 +69,49 @@ function dropMembers(spaces, item) {
   return spaces.filter((space) => groupKey(space, splitName(space).group) === item.id);
 }
 
+export function validateGroupName(value) {
+  const name = value.trim();
+  if (!name) return { error: "Enter a group name." };
+  if (name.includes(SEP)) return { error: "Group names cannot contain ·." };
+  return { name };
+}
+
+function groupRenames(spaces, machine, group, to) {
+  if (typeof group !== "string") return null;
+  const members = dropMembers(spaces, { kind: "group", id: JSON.stringify([machine ?? null, group]) });
+  if (!members.length) return null;
+  const names = members.map(space => renameForDrop(space, to, true)).filter(Boolean);
+  return { commands: names.map(args => ({ cmd: "space.rename", args })), names };
+}
+
+export function planRenameGroup(spaces, machine, group, value) {
+  const { name } = validateGroupName(value);
+  return name === undefined ? null : groupRenames(spaces, machine, group, name);
+}
+
+export function planUngroup(spaces, machine, group) {
+  return groupRenames(spaces, machine, group, null);
+}
+
+export function findNewSpace(before, spaces, machine) {
+  const added = spaces.filter(space => machineOf(space) === (machine ?? null) && !before.has(space.id));
+  return added.length === 1 && !added[0].named && added[0].active ? added[0] : null;
+}
+
+export function namesApplied(spaces, names) {
+  return names.every(({ id, name }) => spaces.some(space => space.id === id && space.named && space.name === name));
+}
+
+export function planIntoGroup(spaces, newId, machine, group) {
+  const space = spaces.find(s => s.id === newId);
+  if (!space || space.named || typeof group !== "string" || machineOf(space) !== (machine ?? null)) return null;
+  const rename = renameForDrop(space, group, true);
+  const target = dropMembers(spaces, { kind: "group", id: groupKey(space, group) })
+    .filter(member => member.id !== newId).at(-1);
+  if (!target) return { commands: rename ? [{ cmd: "space.rename", args: rename }] : [], names: rename ? [rename] : [] };
+  return buildDropPlan(spaces, { machine: machineOf(space), ids: [newId], anchor: target.id, after: true, rename });
+}
+
 function atDropPosition(spaces, { machine, ids, anchor, after, edge }) {
   const order = spaces.filter((space) => machineOf(space) === machine).map((space) => space.id);
   if (edge) {
@@ -54,7 +125,7 @@ function atDropPosition(spaces, { machine, ids, anchor, after, edge }) {
 
 export function dropApplied(spaces, expected) {
   const { rename } = expected;
-  if (rename && !spaces.some((space) => space.id === rename.id && space.named && space.name === rename.name)) {
+  if (rename && !namesApplied(spaces, [rename])) {
     return false;
   }
   return atDropPosition(spaces, expected);
@@ -165,4 +236,20 @@ export function groupRows(rows) {
     entry.rows = nestWorktrees(entry.rows);
   }
   return entries;
+}
+
+// ScrollHandle indexes direct children. A selected hidden member is
+// represented by its folded header, which already carries the selection.
+export function wideSpaceList(rows, foldedGroups) {
+  const entries = [];
+  for (const entry of groupRows(rows)) {
+    entries.push(entry);
+    if (entry.kind === "group" && !foldedGroups.has(entry.key)) {
+      entries.push(...entry.rows.map(row => ({ kind: "space", row, inGroup: true })));
+    }
+  }
+  const activeAt = entries.findIndex(entry => entry.kind === "space"
+    ? entry.row.w.active
+    : entry.active && foldedGroups.has(entry.key));
+  return { entries, activeAt };
 }

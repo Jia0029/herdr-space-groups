@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Adapted from the Herdr 0.1.15 built-in spaces mod (github.com/herdrdev/herdr-app).
+// Adapted from the Herdr 0.1.16 built-in spaces mod (github.com/herdrdev/herdr-app).
 // Changes: per-machine name-prefix groups, local folding, collapsed group status,
 // and group-scoped worktree nesting. See NOTICE.
 //
@@ -9,9 +9,9 @@
 // Click to switch, right-click for its menu, drag to reorder.
 
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex } from "gpui-base";
-import { spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout, notify } from "herdr";
-import { dropApplied, endDropTarget, exceedsDragThreshold, groupRows, nestWorktrees, planDrop, releaseAction, rowPlacement, splitName } from "./groups.js";
+import { v_flex, h_flex, Input, InputState, ScrollHandle } from "gpui-base";
+import { spaces, machines, panes, run, openOverlay, closeOverlay, props, exec, hc, theme, shared, setShared, watchFolder, window, layout, notify } from "herdr";
+import { dropApplied, endDropTarget, exceedsDragThreshold, findNewSpace, MACHINE_ORDER_KEY, namesApplied, nestWorktrees, orderMachines, planDrop, planIntoGroup, planMachineMove, planRenameGroup, planUngroup, releaseAction, rowPlacement, splitName, validateGroupName, wideSpaceList } from "./groups.js";
 
 const FOLDED_GROUPS_KEY = "space-groups.folded";
 
@@ -35,12 +35,28 @@ function place(s, ps) {
 }
 const rowHeight = ({ tree }) => (tree ? 28 : 30);
 const RAIL_CELL = 32;
+// A space's name and its git tail never shrink below this, so a short one ("api")
+// stays readable instead of turning into an ellipsis next to a long branch.
+const SIDE_MIN = 48;
+const GROUP_INDENT = 14;
 const railCell = (el) => h_flex().flex_none().justify_center().child(el);
 const where = (s, ps) => JSON.stringify([s.machine ?? null, place(s, ps)]);
 const base = (path) => path.replace(/\/+$/, "").split("/").pop();
 // Changes made outside Herdr (an editor's save, a commit in another app): looked
 // for this often, in repos the list shows, while the window is in front.
 const FALLBACK = 60000;
+// Places looked at together (two git runs each). All at once, a few hundred spaces
+// run out of the app's open files (256 when started from the Dock on macOS) or
+// past a machine core's 16 running execs, and those spaces wait for FALLBACK.
+const AT_ONCE = 6;
+
+// Both runs, finished: a place isn't done while one of its runs still holds a slot.
+async function both(a, b) {
+  const done = await Promise.allSettled([a, b]);
+  const failed = done.find((d) => d.status === "rejected");
+  if (failed) throw failed.reason;
+  return done.map((d) => d.value);
+}
 
 // What a stored color name looks like on an avatar (the same in every mod
 // that draws space avatars): one strong color per hue, light and dark alike.
@@ -57,6 +73,13 @@ export function tone(t, status) {
 
 export default class Spaces extends View {
   init(_props, cx) {
+    const panel = props() ?? {};
+    if (panel.groupPrompt) { this.initGroupPrompt(panel, cx); return; }
+    if (panel.groupAction) {
+      cx.timer.after(0, cx => this.performGroupAction(panel, cx));
+      return;
+    }
+    if (panel.groupMenu) return;
     this.git = {}; // where() -> { name, branch, ahead, behind, repo, linked }, null: not a repo
     this.checked = {}; // where() -> when it was last looked at
     this.unsure = new Set(); // where()s git couldn't answer for (a machine away)
@@ -64,17 +87,22 @@ export default class Spaces extends View {
     this.busy = {}; // pane -> an agent working or a program in front of its shell
     this.ready = {}; // machine -> its layout was readable at the last look
     this.at = {}; // space -> its where() at the last look
-    this.watching = new Set(); // local repos' git folders
+    this.watching = new Map(); // local repos' pending folder watches
     // Spaces made while this runs wait (at most a moment) for their git, so a
     // worktree appears under its repo instead of jumping there.
     this.shown = new Set(spaces().map((s) => s.id));
     this.born = {};
     this.drag = null;
+    this.scroll = ScrollHandle.new(); // the list's position: the active space is brought into view through it
+    this.activeAt = -1; // the active space's place among the list's children (headers and rows), -1 when not drawn
     this.machines = [];
-    this.reconnecting = JSON.parse(localStorage.getItem("machines.reconnecting") ?? "{}");
-    for (const state of Object.values(this.reconnecting)) state.busy = false;
-    this.folded = new Set(JSON.parse(localStorage.getItem("machines.folded") ?? "[]"));
-    this.foldedGroups = new Set(JSON.parse(localStorage.getItem(FOLDED_GROUPS_KEY) ?? "[]"));
+    try {
+      this.reconnecting = JSON.parse(localStorage.getItem("machines.reconnecting") ?? "{}");
+      if (!this.reconnecting || typeof this.reconnecting !== "object" || Array.isArray(this.reconnecting)) this.reconnecting = {};
+      for (const state of Object.values(this.reconnecting)) state.busy = false;
+    } catch { this.reconnecting = {}; }
+    try { this.folded = new Set(JSON.parse(localStorage.getItem("machines.folded") ?? "[]")); } catch { this.folded = new Set(); }
+    try { this.foldedGroups = new Set(JSON.parse(localStorage.getItem(FOLDED_GROUPS_KEY) ?? "[]")); } catch { this.foldedGroups = new Set(); }
     this.refreshMachines(cx);
     cx.timer.every(15000, cx => this.refreshMachines(cx));
     // Refresh only when the refs could have changed (see `due`).
@@ -98,6 +126,16 @@ export default class Spaces extends View {
     const at = {};
     for (const s of sp) at[s.id] = where(s, ps);
     const keys = new Set(Object.values(at).filter((k) => JSON.parse(k)[1]));
+    for (const k of Object.keys(this.git)) if (!keys.has(k)) {
+      delete this.git[k];
+      delete this.checked[k];
+      this.unsure.delete(k);
+    }
+    const repos = new Set(Object.values(this.git).filter(Boolean).map((g) => g.repo));
+    for (const [repo, pending] of this.watching) if (!repos.has(JSON.stringify([null, repo]))) {
+      this.watching.delete(repo);
+      pending.cancel();
+    }
     const due = new Set([...keys].filter((k) => !(k in this.git)));
     for (const [id, k] of Object.entries(at)) if (this.at[id] && this.at[id] !== k && keys.has(k)) due.add(k);
     this.at = at;
@@ -193,10 +231,11 @@ export default class Spaces extends View {
       while (this.pending.size) {
         const keys = [...this.pending];
         this.pending.clear();
-        await Promise.all(keys.map((key) => this.check(key, cx)));
+        let next = 0;
+        await Promise.all(Array.from({ length: Math.min(AT_ONCE, keys.length) }, async () => {
+          while (next < keys.length) await this.check(keys[next++], cx);
+        }));
       }
-      const used = new Set(Object.values(this.git).filter(Boolean).map((g) => JSON.parse(g.repo)).filter(([on]) => !on).map(([, repo]) => repo));
-      for (const repo of this.watching) if (!used.has(repo)) this.watching.delete(repo);
       this.refreshing = false;
       cx.notify();
     });
@@ -210,22 +249,24 @@ export default class Spaces extends View {
     try {
       // Ref-only reads avoid scanning the worktree or waking its index watch.
       // Two reads: a folder name may itself contain a newline.
-      const [r, common] = await Promise.all([
+      const [r, common] = await both(
         exec("git", ["rev-parse", "--path-format=absolute", "--show-toplevel"], { cwd, on }),
         exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd, on }),
-      ]);
+      );
       if (r.code !== 0 || common.code !== 0) {
         // Only git's own "no" is remembered as no repo; anything else is asked again.
-        if (!/not a git repository/i.test(r.code !== 0 ? r.stderr : common.stderr)) this.unsure.add(key);
-        this.git[key] = null;
+        if (!/not a git repository/i.test(r.code !== 0 ? r.stderr : common.stderr)) {
+          this.unsure.add(key);
+          this.git[key] ??= null;
+        } else this.git[key] = null;
         return;
       }
       // The repo's own .git folder names it; a worktree's top differs from it.
       const top = r.stdout.replace(/\n$/, ""), repo = common.stdout.replace(/\n$/, "");
-      const [branch, counts] = await Promise.all([
+      const [branch, counts] = await both(
         exec("git", ["symbolic-ref", "-q", "HEAD"], { cwd, on }),
         exec("git", ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"], { cwd, on }),
-      ]);
+      );
       const name = repo.endsWith("/.git") ? base(repo.slice(0, -5)) : base(repo).replace(/\.git$/, "");
       const [ahead, behind] = counts.code === 0 ? counts.stdout.trim().split(/\s+/).map(Number) : [0, 0];
       const info = { name, branch: branch.code === 0 ? branch.stdout.trim().replace(/^refs\/heads\//, "") : "(detached)", ahead, behind, repo: JSON.stringify([on, repo]), linked: repo !== `${top}/.git` };
@@ -240,21 +281,142 @@ export default class Spaces extends View {
 
   watch(repo, cx) {
     if (this.watching.has(repo)) return;
-    this.watching.add(repo);
+    const pending = watchFolder(repo);
+    this.watching.set(repo, pending);
     cx.spawn(async (cx) => {
+      let current = pending;
       try {
-        while (this.watching.has(repo)) {
-          await watchFolder(repo);
+        for (;;) {
+          await current;
+          if (this.watching.get(repo) !== current) return;
           const mine = JSON.stringify([null, repo]);
-          if (this.watching.has(repo)) this.refreshGit(Object.keys(this.git).filter((k) => this.git[k]?.repo === mine), cx);
+          const keys = Object.keys(this.git).filter((k) => this.git[k]?.repo === mine);
+          if (!keys.length) break;
+          this.refreshGit(keys, cx);
+          current = watchFolder(repo);
+          this.watching.set(repo, current);
         }
-      } catch { this.watching.delete(repo); }
+      } catch {}
+      if (this.watching.get(repo) === current) this.watching.delete(repo);
     });
   }
 
   menu(w) {
     // A popup is as tall as its items; height is only the most.
     openOverlay({ mod: "menu", kind: "popup", width: 200, height: 260, props: { tab: "space", target: { id: w.id } } });
+  }
+
+  openGroupMenu(machine, group) {
+    openOverlay({ mod: "space-groups", kind: "popup", width: 205, height: group === null ? 42 : 106,
+      props: { groupMenu: true, machine, group } });
+  }
+
+  groupMenu(panel, t) {
+    const items = panel.group === null ? [["create", "New group…", true]] : [
+      ["rename", "Rename group…", true],
+      ["ungroup", "Ungroup", false],
+      ["add", "New space in group", false],
+    ];
+    return v_flex().w_full().p(5).bg(t.popover).text_color(t.foreground).text_size(12.8)
+      .children(items.map(([action, label, prompt]) => h_flex().id(`group-menu-${action}`).h(32).px(8)
+        .items_center().rounded(6).cursor_pointer().hover(s => s.bg(t.hover))
+        .on_click(() => {
+          if (!prompt) { this.startGroupAction(panel, action, panel.group); return; }
+          closeOverlay(panel.overlay);
+          openOverlay({ mod: "space-groups", kind: "dialog", modal: true, width: 340, height: 185,
+            props: { groupPrompt: action, machine: panel.machine, group: panel.group, title: label } });
+        }).child(label)));
+  }
+
+  initGroupPrompt(panel, cx) {
+    const value = panel.groupPrompt === "rename" ? panel.group : "";
+    this.groupInput = InputState.new({ value });
+    this.groupInput.set_selected_range({ start: 0, end: value.length });
+    this.groupInput.on("change", (_e, cx) => { this.groupInputError = null; cx.notify(); });
+    this.groupInput.on("submit", (_e, cx) => this.submitGroupPrompt(panel, cx));
+    this.groupFocus = cx.focus_handle();
+    this.groupInput.focus();
+    cx.timer.after(600, () => this.groupInput.focus());
+  }
+
+  submitGroupPrompt(panel, cx) {
+    const { name, error } = validateGroupName(this.groupInput.value());
+    if (error) { this.groupInputError = error; cx.notify(); return; }
+    this.startGroupAction(panel, panel.groupPrompt, name);
+  }
+
+  groupPrompt(panel, t) {
+    const button = (id, label, action) => h_flex().id(id).h(30).px(12).items_center().rounded(6)
+      .bg(t.raised).cursor_pointer().hover(s => s.bg(t.hover)).on_click(action).child(label);
+    return v_flex().id("group-prompt").track_focus(this.groupFocus)
+      .on_key_down((e, cx) => {
+        if (e.key === "escape") { cx.stop_propagation(); closeOverlay(panel.overlay); }
+      })
+      .w_full().p(15).gap(8).bg(t.popover).text_color(t.foreground).text_size(13)
+      .child(div().font_semibold().child(panel.title))
+      .child(div().text_color(t.dim).child("Group name"))
+      .child(Input.new(this.groupInput).h(34).px(8).rounded(6).border_1().border_color(t.input).bg(t.background))
+      .when(Boolean(this.groupInputError), el => el.child(div().text_color(t.blocked).child(this.groupInputError)))
+      .child(h_flex().gap(8).justify_end()
+        .child(button("group-cancel", "Cancel", () => closeOverlay(panel.overlay)))
+        .child(button("group-save", "Save", (_e, cx) => this.submitGroupPrompt(panel, cx))));
+  }
+
+  startGroupAction(panel, action, name) {
+    closeOverlay(panel.overlay);
+    // The work has its own short-lived view so clicking away from the menu
+    // cannot interrupt discovery of the space or verification of the change.
+    openOverlay({ mod: "space-groups", kind: "window", frame: "none", width: 220, height: 46,
+      props: { groupAction: action, machine: panel.machine, group: panel.group, name } });
+  }
+
+  applySpaceCommands(commands) {
+    for (const { cmd, args } of commands) {
+      if (cmd === "space.rename") run("space.rename", args);
+      if (cmd === "space.move") run("space.move", args);
+    }
+  }
+
+  finishGroupAction(panel, ok) {
+    if (!ok) notify({ title: "Group update was not confirmed", level: "error" });
+    closeOverlay(panel.overlay);
+  }
+
+  waitForGroupAction(panel, deadline, inspect, done, cx) {
+    try {
+      const result = inspect(spaces());
+      if (result) { done(result, cx); return; }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) { this.finishGroupAction(panel, false); return; }
+      cx.timer.after(Math.min(100, remaining), cx => this.waitForGroupAction(panel, deadline, inspect, done, cx));
+    } catch { this.finishGroupAction(panel, false); }
+  }
+
+  applyGroupPlan(panel, plan, cx) {
+    if (!plan) { this.finishGroupAction(panel, false); return; }
+    this.applySpaceCommands(plan.commands);
+    this.waitForGroupAction(panel, Date.now() + 2000, live => (
+      plan.expected ? dropApplied(live, plan.expected) : namesApplied(live, plan.names)
+    ), () => this.finishGroupAction(panel, true), cx);
+  }
+
+  performGroupAction(panel, cx) {
+    try {
+      const current = spaces();
+      if (panel.groupAction === "rename") {
+        this.applyGroupPlan(panel, planRenameGroup(current, panel.machine, panel.group, panel.name), cx);
+        return;
+      }
+      if (panel.groupAction === "ungroup") {
+        this.applyGroupPlan(panel, planUngroup(current, panel.machine, panel.group), cx);
+        return;
+      }
+      if (panel.groupAction !== "create" && panel.groupAction !== "add") { this.finishGroupAction(panel, false); return; }
+      const before = new Set(current.map(s => s.id));
+      run("space.new", { machine: panel.machine ?? "", focus: true });
+      this.waitForGroupAction(panel, Date.now() + 3000, live => findNewSpace(before, live, panel.machine),
+        (space, cx) => this.applyGroupPlan(panel, planIntoGroup(spaces(), space.id, panel.machine, panel.name), cx), cx);
+    } catch { this.finishGroupAction(panel, false); }
   }
 
   orderingDue(now) {
@@ -311,16 +473,31 @@ export default class Spaces extends View {
       .on_mouse_up("left", (e, cx) => this.finishDrag(e, cx, target, key));
   }
 
+  pointerDrop(source, target, placement) {
+    if (!target) return null;
+    if (source.kind === "machine") {
+      if (target.kind !== "machine") return null;
+      const order = planMachineMove(this.machineNames, shared(MACHINE_ORDER_KEY), source.machine, target.machine, placement);
+      return order ? { order, expected: { after: placement === "after" } } : null;
+    }
+    const destination = target.kind === "machine" ? { kind: "edge", machine: target.machine, edge: "top" } : target;
+    return planDrop(spaces(), source, destination, placement);
+  }
+
+  usesPlacement(source, target) {
+    return source.kind === "machine" ? target?.kind === "machine" : target?.kind === "space";
+  }
+
   moveDrag(e, cx, target, key) {
     const drag = this.drag;
     if (!drag) return;
     const wasMoving = drag.moved;
     drag.moved ||= exceedsDragThreshold(drag.start, e.position);
     if (!drag.moved) return;
-    const placement = target?.kind === "space" ? rowPlacement(e) : undefined;
+    const placement = this.usesPlacement(drag.source, target) ? rowPlacement(e) : undefined;
     if (target && drag.over?.key === key
       && (placement === undefined || drag.over.after === (placement === "after"))) return;
-    const plan = target && planDrop(spaces(), drag.source, target, placement);
+    const plan = this.pointerDrop(drag.source, target, placement);
     const next = plan ? { key, after: plan.expected.after } : null;
     if (wasMoving && drag.over?.key === next?.key && drag.over?.after === next?.after) return;
     drag.over = next;
@@ -336,16 +513,21 @@ export default class Spaces extends View {
     const action = releaseAction(drag, key, e.position);
     if (action === "click") {
       if (target.kind === "space") run("space.select", { id: target.id });
-      else this.toggleGroup(target.id);
+      else if (target.kind === "group") this.toggleGroup(target.id);
+      else if (target.kind === "machine" && !drag.moved && !exceedsDragThreshold(drag.start, e.position)) {
+        if (target.openSettings) run("app.settings", { section: "machines" });
+        else this.toggleMachine(target.machine);
+      }
       return;
     }
     if (action !== "drop") return;
-    const placement = target.kind === "space" && drag.over?.key === key
+    const placement = this.usesPlacement(drag.source, target) && drag.over?.key === key
       ? (drag.over.after ? "after" : "before")
-      : undefined;
-    const plan = planDrop(spaces(), drag.source, target, placement);
+      : drag.source.kind === "machine" && target.kind === "machine" ? rowPlacement(e) : undefined;
+    const plan = this.pointerDrop(drag.source, target, placement);
+    if (plan?.order) { setShared(MACHINE_ORDER_KEY, plan.order); return; }
     if (!plan?.commands.length) return;
-    for (const { cmd, args } of plan.commands) run(cmd, args);
+    this.applySpaceCommands(plan.commands);
     this.verifyDrop(plan.expected, Date.now() + 2000, cx);
   }
 
@@ -353,6 +535,12 @@ export default class Spaces extends View {
     if (this.foldedGroups.has(key)) this.foldedGroups.delete(key);
     else this.foldedGroups.add(key);
     localStorage.setItem(FOLDED_GROUPS_KEY, JSON.stringify([...this.foldedGroups]));
+  }
+
+  toggleMachine(machine) {
+    if (this.folded.has(machine)) this.folded.delete(machine);
+    else this.folded.add(machine);
+    localStorage.setItem("machines.folded", JSON.stringify([...this.folded]));
   }
 
   cancelDrag(cx) {
@@ -391,6 +579,10 @@ export default class Spaces extends View {
       .when(this.drag?.moved && this.drag.key === dragKey, el => el.opacity(0.5))
       .when(Boolean(over), el => el.border_1().border_color(t.accent))
       .when(over && this.drag.source.kind === "group", el => el.child(this.dropLine(t, over.after)))
+      .on_mouse_down("right", (_e, cx) => {
+        cx.stop_propagation();
+        this.openGroupMenu(rows[0].w.machine ?? null, name);
+      })
       .child(svg(`mods/workspace-chrome/chevron-${folded ? "right" : "down"}.svg`).size(11).flex_none())
       .child(div().flex_1().min_w(0).truncate().font_semibold().child(name || "(empty group)"))
       .child(div().flex_none().text_color(selected ? t.muted : t.dim).child(String(rows.length)))
@@ -401,12 +593,10 @@ export default class Spaces extends View {
   }
 
   spaceRows(rows, t, collapsed) {
-    if (collapsed) return rows.map(r => this.compact(r, t));
-    return groupRows(rows).flatMap((entry) => {
-      if (entry.kind === "space") return [this.row(entry.row, t)];
-      const head = this.groupHeading(entry, t);
-      return this.foldedGroups.has(entry.key) ? [head] : [head, ...entry.rows.map(r => this.row(r, t, true))];
-    });
+    if (collapsed) return { items: rows.map(r => this.compact(r, t)), activeAt: rows.findIndex(r => r.w.active) };
+    const { entries, activeAt } = wideSpaceList(rows, this.foldedGroups);
+    const items = entries.map(e => e.kind === "group" ? this.groupHeading(e, t) : this.row(e.row, t, e.inGroup));
+    return { items, activeAt };
   }
 
   endZone(target, t) {
@@ -421,7 +611,7 @@ export default class Spaces extends View {
   }
 
   withEndZone(rows, machine, t, collapsed) {
-    if (collapsed || !this.drag?.moved) return rows;
+    if (collapsed || !this.drag?.moved || this.drag.source.kind === "machine") return rows;
     const target = endDropTarget(this.drag.source.machine, machine);
     return target ? [...rows, this.endZone(target, t)] : rows;
   }
@@ -429,7 +619,12 @@ export default class Spaces extends View {
   // The rows, under a header per machine once one isn't this computer.
   grouped(t, collapsed) {
     const rows = this.ordered();
-    const remote = [...new Set([...rows.map(r => r.w.machine).filter(Boolean), ...this.machines.map(m => m.name), ...Object.keys(this.reconnecting)])].sort();
+    // Where the active space's row lands among the children this returns: the list scrolls by its direct
+    // children, including group and machine headings, separators, guidance and drop zones.
+    this.activeAt = -1;
+    let before = 0;
+    const remote = [...new Set([...rows.map(r => r.w.machine), ...this.machines.map(m => m.name), ...Object.keys(this.reconnecting)].filter(Boolean))];
+    this.machineNames = [null, ...remote];
     const loading = m => {
       const layout = machines().find(k => k.name === m)?.layout;
       return layout === "loading" || (!layout && this.machines.some(k => k.name === m && k.state === "connected"))
@@ -437,11 +632,14 @@ export default class Spaces extends View {
     };
     const loadingRow = m => h_flex().id(`machine-loading-${m ?? "local"}`).h(28).flex_none().px(collapsed ? 0 : 8).items_center().when(collapsed, el => el.justify_center()).text_size(12).text_color(t.dim).child(collapsed ? "…" : "Loading…");
     if (!remote.length) {
-      const localRows = loading(null) && !rows.length ? [loadingRow(null)] : this.spaceRows(rows, t, collapsed);
-      return this.withEndZone(localRows, null, t, collapsed);
+      if (loading(null) && !rows.length) return [loadingRow(null)];
+      const { items, activeAt } = this.spaceRows(rows, t, collapsed);
+      this.activeAt = activeAt;
+      return this.withEndZone(items, null, t, collapsed);
     }
-    const machineNames = [null, ...remote];
-    return machineNames.flatMap((m) => {
+    const machineNames = orderMachines(this.machineNames, shared(MACHINE_ORDER_KEY));
+    return machineNames.flatMap((m, i) => {
+      const separator = !collapsed && i > 0 ? [div().w_full().h(1).flex_none().mt(8).mb(4).bg(t.border)] : [];
       const mine = rows.filter((r) => (r.w.machine ?? null) === m);
       const repair = this.reconnecting[m];
       const machine = this.machines.find(k => k.name === m) ?? repair?.machine;
@@ -449,36 +647,44 @@ export default class Spaces extends View {
       const rebuilt = this.rebuilt(machine) || !!repair;
       const login = machine?.state === "needs_login" ? `hc machine login ${m}` : null;
       const folded = this.folded.has(m);
-      const dropKey = `machine-top-${JSON.stringify(m)}`;
+      const dropKey = `machine-${m ?? ""}`;
+      const machineDrag = this.drag?.source.kind === "machine";
+      const over = this.drag?.over?.key === dropKey ? this.drag.over : null;
       const icon = svg(`mods/workspace-chrome/${m ? "server" : "monitor"}.svg`).size(13).flex_none();
       const badge = div().absolute().right(-3).bottom(-2).size(6).rounded(3).border_1().border_color(t.chrome).bg(connected ? t.ansi2 : t.dim);
-      const head = h_flex().id(`machine-${m ?? "local"}`).h(26).flex_none().px(collapsed ? 0 : 8).gap(7).items_center().text_size(11).text_color(t.dim)
+      const head = h_flex().id(`machine-${JSON.stringify(m)}`).relative().h(26).flex_none().px(collapsed ? 0 : 8).gap(7).items_center().text_size(11).text_color(t.dim)
         .when(collapsed, el => el.mt(4).w(RAIL_CELL).justify_center().rounded(6).tooltip(login ? `${m} needs a login: run ${login}. Click for Copy.` : m ? `${m} · ${connected ? "connected" : (machine?.state ?? "asleep").replace(/_/g, " ")}` : "This computer"))
         .cursor_pointer()
         .when(!this.drag?.moved, el => el.hover(s => s.bg(t.hover)))
-        .when(!collapsed && this.drag?.over?.key === dropKey, el => el.border_1().border_color(t.accent))
-        .on_click((_e, cx) => {
-          if (collapsed && login) { run("app.settings", { section: "machines" }); return; }
-          folded ? this.folded.delete(m) : this.folded.add(m);
-          localStorage.setItem("machines.folded", JSON.stringify([...this.folded]));
-          cx.notify();
+        .when(machineDrag && this.drag.moved && this.drag.key === dropKey, el => el.opacity(0.5))
+        .when(over && machineDrag, el => el.child(this.dropLine(t, over.after)))
+        .when(!collapsed && over && !machineDrag, el => el.border_1().border_color(t.accent))
+        .on_mouse_down("right", (_e, cx) => {
+          cx.stop_propagation();
+          this.openGroupMenu(m, null);
         })
+        .when(machine?.keeps_running_after_logout === false, el => el.child(div().id(`machine-logout-${m}`)
+          .flex_none().text_color(t.blocked).tooltip("Agents stop when you disconnect. Click for the fix.")
+          .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+          .on_click((_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "machine-add", kind: "dialog", width: 560 }); }).child("⚠")))
         .when(!collapsed, el => el.child(icon))
         .when(collapsed, el => el.child(div().relative().flex_none().child(icon).when(Boolean(m), el => el.child(badge))))
-        .when(!collapsed, el => el.child(div().flex_1().truncate().child(m ?? "This computer"))
+        .when(!collapsed, el => el.child(div().flex_1().truncate().text_color(t.muted).child(m ?? "This computer"))
           .when(!connected && !rebuilt && !login, el => el.child(div().flex_none().child((machine?.state ?? "asleep").replace(/_/g, " "))))
           .when(rebuilt, el => el.child(h_flex().flex_none().gap(3).items_center()
             .child(div().max_w(140).truncate().child(repair?.error || "rebuilt ·"))
             .child(div().id(`machine-connect-${m}`).text_color(repair?.error ? t.blocked : t.muted)
               .hover(s => s.text_color(t.foreground))
               .tooltip(repair?.error || "This machine was rebuilt or replaced. Click to connect to the new one.")
+              .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
               .on_click((_e, cx) => { cx.stop_propagation(); this.reconnect(machine, cx); })
               .child(repair?.busy ? "Connecting…" : "Connect"))))
           .when(connected, el => el.child(div().id(`machine-add-${m ?? "local"}`).flex_none().px(4).rounded(4).hover(s => s.bg(t.hover).text_color(t.foreground))
+            .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
             .on_click((_e, cx) => { cx.stop_propagation(); run("space.new", { machine: m ?? "" }); }).child("+")))
           .child(div().size(6).rounded(3).flex_none().bg(connected ? t.ansi2 : t.dim))
           .child(svg(`mods/workspace-chrome/chevron-${folded ? "right" : "down"}.svg`).size(11).flex_none()));
-      const machineHead = collapsed ? head : this.trackDropTarget(head, { kind: "edge", machine: m, edge: "top" }, dropKey);
+      const machineHead = this.trackDrag(head, { kind: "machine", id: m ?? "", machine: m, openSettings: collapsed && Boolean(login) });
       const empty = h_flex().id(`machine-new-${m ?? "local"}`).h(28).flex_none().px(collapsed ? 0 : 8).gap(7).items_center().rounded(7)
         .text_size(12).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
         .on_click(() => run("space.new", { machine: m ?? "" }))
@@ -486,7 +692,7 @@ export default class Spaces extends View {
           .child(h_flex().size(18).rounded(5).border_1().border_color(t.dim).items_center().justify_center()
             .child(svg("mods/workspace-chrome/plus.svg").size(10))))
         .when(!collapsed, el => el.child(svg("mods/workspace-chrome/plus.svg").size(12)).child("New space there"));
-      if (!collapsed && rebuilt) return [machineHead];
+      if (!collapsed && rebuilt) { before += separator.length + 1; return [...separator, machineHead]; }
       const cell = collapsed ? railCell : (el) => el;
       const guidance = !collapsed && login ? [v_flex().px(8).pb(6).gap(3).flex_none()
         .child(div().text_size(11).text_color(t.blocked).child("needs a login: run"))
@@ -496,24 +702,32 @@ export default class Spaces extends View {
             .text_size(11).text_color(t.foreground).bg(t.raised).cursor_pointer().hover(s => s.bg(t.hover))
             .on_click((_e, cx) => { cx.stop_propagation(); cx.write_to_clipboard(login); this.copiedLogin = login; cx.notify(); })
             .child(this.copiedLogin === login ? "Copied" : "Copy")))] : [];
-      if (folded) return [cell(machineHead), ...guidance];
-      const spaceRows = mine.length ? this.spaceRows(mine, t, collapsed) : [loading(m) ? loadingRow(m) : cell(empty)];
-      return [cell(machineHead), ...guidance, ...this.withEndZone(spaceRows, m, t, collapsed)];
+      const items = [...separator, cell(machineHead), ...guidance];
+      if (!folded) {
+        const { items: spaceRows, activeAt } = mine.length
+          ? this.spaceRows(mine, t, collapsed)
+          : { items: [loading(m) ? loadingRow(m) : cell(empty)], activeAt: -1 };
+        if (activeAt >= 0) this.activeAt = before + items.length + activeAt;
+        items.push(...this.withEndZone(spaceRows, m, t, collapsed));
+      }
+      before += items.length;
+      return items;
     });
   }
 
   // Only what's unusual, after the name: "herdr \u00b7 spike \u21912 \u21931". The repo or
   // branch goes when the name already says it (a worktree is named after its branch),
-  // and master/main go: nearly every space is on one.
-  gitTail(g, tree, name, t) {
+  // and master/main go: nearly every space is on one. When the row is full, it
+  // and the name both start from their text's width and give way in proportion.
+  gitTail(g, tree, name, t, minTextWidth) {
     const raw = g.branch ?? "detached";
     const same = (a) => a.toLowerCase() === name.toLowerCase();
     const branch = same(raw) || raw === "master" || raw === "main" ? "" : raw;
     const repo = tree || same(g.name) ? "" : g.name;
     const where = [repo, branch].filter(Boolean).join(" \u00b7 ");
     return h_flex()
-      .flex_1()
-      .min_w(0)
+      .flex_auto()
+      .min_w(where ? minTextWidth : 0)
       .gap(5)
       .justify_end()
       .items_center()
@@ -526,6 +740,7 @@ export default class Spaces extends View {
 
   row({ w, g, tree, label }, t, inGroup = false) {
     const on = w.active;
+    const minTextWidth = inGroup ? SIDE_MIN - GROUP_INDENT : SIDE_MIN;
     const dragKey = `space-${w.id}`;
     const over = this.drag?.over?.key === dragKey ? this.drag.over : null;
     const colors = shared("space.colors") ?? {};
@@ -535,7 +750,7 @@ export default class Spaces extends View {
       .relative()
       .id(`space-${w.id}`)
       .px(8)
-      .when(inGroup, el => el.pl(22))
+      .when(inGroup, el => el.pl(8 + GROUP_INDENT))
       .h(rowHeight({ tree }))
       .flex_none()
       .justify_center()
@@ -549,10 +764,10 @@ export default class Spaces extends View {
         h_flex()
           .gap(9)
           .items_center()
-          .when(Boolean(tree), el => el.pl(22).child(svg("mods/workspace-chrome/branch.svg").size(13).text_color(t.dim)))
+          .when(Boolean(tree), el => el.pl(22).child(svg("mods/workspace-chrome/branch.svg").size(13).flex_none().text_color(t.dim)))
           .when(!tree, el => el.child(h_flex().size(18).flex_none().rounded(5).bg(fill).items_center().justify_center().text_size(10.5).font_bold().text_color("#ffffff").child([...label][0]?.toUpperCase() ?? "?")))
-          .child(div().when(!inGroup, el => el.flex_shrink(0)).min_w(0).max_w(150).truncate().text_color(t.foreground).child(label))
-          .child(g ? this.gitTail(g, tree, label, t) : div().flex_1()),
+          .child(div().flex_initial().min_w(minTextWidth).truncate().text_color(t.foreground).child(label))
+          .child(g ? this.gitTail(g, tree, label, t, minTextWidth) : div().flex_1()),
       );
     return this.trackDrag(row, { kind: "space", id: w.id, machine: w.machine ?? null });
   }
@@ -575,6 +790,10 @@ export default class Spaces extends View {
 
   render() {
     const t = theme();
+    const panel = props() ?? {};
+    if (panel.groupMenu) return this.groupMenu(panel, t);
+    if (panel.groupPrompt) return this.groupPrompt(panel, t);
+    if (panel.groupAction) return div().p(12).bg(t.popover).text_color(t.foreground).child("Updating spaces…");
     const collapsed = narrow();
     const palette = ["ansi6", "ansi3", "ansi4", "ansi5", "ansi2", "ansi1"];
     const sp = spaces();
@@ -588,17 +807,31 @@ export default class Spaces extends View {
       changed = true;
     }
     if (changed) setShared("space.colors", kept);
+    const list = this.grouped(t, collapsed);
+    // Bring the active space into view when it, or its place in the list, changes; a row already in view stays put.
+    const active = sp.find(p => p.active)?.id;
+    if (!this.drag?.moved && (this.revealAfterDrag || active !== this.revealed || this.activeAt !== this.revealedAt)) {
+      this.revealAfterDrag = false;
+      this.revealed = active;
+      this.revealedAt = this.activeAt;
+      if (this.activeAt >= 0) this.scroll.scroll_to_item(this.activeAt);
+    }
     return v_flex().size_full().min_h(0).bg(t.chrome).text_size(13)
       .child(h_flex().h(31).pl(16).pr(10).items_center().justify_between().text_size(11.5).text_color(t.dim)
         .when(collapsed, el => el.pl(0).pr(0).justify_center())
         .when(!collapsed, el => el.child("Spaces"))
         .child(div().id("space-new").size(26).flex_none().flex().items_center().justify_center().rounded(6).hover(s => s.bg(t.hover).text_color(t.foreground))
           .on_click(() => run("space.new")).child(svg("mods/workspace-chrome/plus.svg").size(14))))
-      .child(v_flex().id("space-list").flex_1().min_h(0).px(collapsed ? 0 : 8).pb(14).overflow_y_scrollbar().mode("always")
+      .child(v_flex().id("space-list").flex_1().min_h(0).px(collapsed ? 0 : 8).pb(14).overflow_y_scrollbar().mode("always").track_scroll(this.scroll)
+        .on_size_change((_size, cx) => {
+          if (this.activeAt < 0) return;
+          if (this.drag?.moved) this.revealAfterDrag = true;
+          else { this.scroll.scroll_to_item(this.activeAt); cx.notify(); }
+        })
         .on_mouse_move((e, cx) => this.moveDrag(e, cx, null, null))
         .on_mouse_up("left", (_e, cx) => this.cancelDrag(cx))
         .on_mouse_down_out((_e, cx) => this.cancelDrag(cx))
         .on_hover((inside, cx) => { if (!inside) this.cancelDrag(cx); })
-        .children(this.grouped(t, collapsed)));
+        .children(list));
   }
 }

@@ -55,6 +55,24 @@ The order is changed in Herdr. Worktree nesting still affects the visible
 order. Herdr shows an error if the planned name or order cannot be confirmed
 within about two seconds.
 
+## Machine order and group menus
+
+Remote machines appear in name order ahead of **This computer** by default.
+Drag a machine heading in Spaces to the upper or lower half of another
+heading. Spaces and grouped Agents share the saved order on this client.
+New remote machines enter in name order ahead of the local entry.
+
+Right-click a Spaces group heading to rename the group, ungroup its
+members, or create a space at its end. A rename into an existing prefix
+merges the groups on that machine. Ungroup keeps a member's existing name
+if its short name is empty. Right-click a machine heading for **New group**,
+which creates its first space on that machine. Group names accept letters
+and other text after trimming. The name must be nonempty and cannot
+contain `·`. Press Enter to confirm or Esc to cancel a name prompt.
+The mod reports an error if it cannot confirm creation or the resulting
+names and order. If creation is ambiguous, the created space can remain
+under its original name.
+
 ## Install
 
 1. Locate the app home. The defaults are `~/.config/herdr-app` on macOS and
@@ -84,8 +102,9 @@ layout, `<app home>/layouts/main-groups.json`.
 
 ## Compatibility and known limits
 
-Tested on Herdr 0.1.15 (macOS) and 0.1.16 (Windows). macOS validation used
-the mod checker. Windows validation used the desktop client.
+Requires Herdr 0.1.16 or later. Both mods are based on the built-in panels
+from that release. The 0.4.0 build is checked with the macOS 0.1.16 mod
+checker. Desktop validation of this build is pending.
 
 - The narrow rail uses the original numbered cells and per-space status
   glyphs. Group drops are available in the expanded sidebar. Machine
@@ -95,9 +114,11 @@ the mod checker. Windows validation used the desktop client.
   appears in its own group or as a standalone row according to its name.
   Nesting within a prefix group affects the sidebar presentation. Ungrouped
   worktrees retain the built-in automatic ordering.
-- This is a copy of the Spaces mod shipped with Herdr 0.1.15. Herdr upgrades
-  do not merge fixes into this mod automatically. The mod uses the shipped
-  `menu` overlay and `workspace-chrome` icons.
+- This is a copy of the Spaces mod shipped with Herdr 0.1.16. Herdr upgrades
+  require a manual merge of upstream fixes. The mod uses the shipped
+  `menu` and `machine-add` overlays and `workspace-chrome` icons.
+- The current space scrolls into view when the selection or its row changes.
+  A folded prefix group scrolls to its heading when it contains the selection.
 
 ## Development
 
@@ -129,6 +150,17 @@ source group, including those without agents, and preserves their names.
 The new order also appears in Spaces. Pinned and Priority groups and the
 compact rail keep their existing controls.
 
+When the grouped list contains agents from multiple machines, muted machine
+headings separate their groups in the order saved by Spaces. The Agents
+machine headings are labels. Use the machine headings in Spaces to reorder
+machines.
+
+The wide Agents toolbar has a **Show/hide Spaces** button when the layout
+contains a `spaces` block. Herdr remembers that block's visibility.
+For keyboard access, add `"cmd-shift-s": "layout.toggle:spaces"` on macOS
+or `"ctrl-shift-s": "layout.toggle:spaces"` on Windows to the `global`
+section of `keys.json`.
+
 Fold a group to keep its status summary visible. A separate accent dot
 appears if an agent or a visible member's known descendant becomes
 **Done** or **Blocked** after the fold and still has that status.
@@ -141,8 +173,7 @@ then change `"mod": "agents"` to `"mod": "agent-groups"` in your cloned
 layout. This mod can be installed independently of `space-groups`.
 To uninstall, restore `"mod": "agents"` in your layout or switch back to
 `main`, then remove the `mods/agent-groups` folder. The mod is adapted
-from the Agents mod in Herdr 0.1.15 and has passed its macOS mod check.
-Desktop interaction testing is pending. Upstream fixes require a manual update.
+from the Agents mod in Herdr 0.1.16. Upstream fixes require a manual update.
 
 ## 中文简述
 
@@ -155,15 +186,26 @@ Desktop interaction testing is pending. Upstream fixes require a manual update.
 列表有机器标题时可拖到来源机器标题置顶。单个空间放到首尾会去掉首个前缀（空显示名除外），
 整组放到首尾保留名称和成员顺序。窄栏不显示放置区。
 
+默认远程机器按名称排列，本机在最后。拖动 Spaces 的机器标题可调整顺序，两个面板在
+当前客户端共用该顺序。右键组标题可重命名、取消分组或在组内新建空间，右键机器标题
+可新建组及其第一个空间。组名去掉首尾空格后不能为空，也不能含 `·`。输入框支持
+Enter 确认、Esc 取消。
+
 Windows 的 Herdr 主目录默认为 `%USERPROFILE%\.config\herdr-app`。如果命令不在
 `PATH` 中，可以使用 Herdr 安装目录下 `herdr-app.exe` 的完整路径。
-已在 Herdr 0.1.15（macOS 静态检查）和 0.1.16（Windows 桌面端）验证。
+两个 mod 均改写自 Herdr 0.1.16 自带面板，最低需要 Herdr 0.1.16。
+0.4.0 使用 macOS 0.1.16 检查器验收，桌面交互待验证。选中空间会自动滚进视野，
+若它位于折叠的前缀组，则滚到该组标题。
 这是个人项目，欢迎反馈问题，维护无保证。
 
 可选的 `agent-groups` 替换下方 Agents 面板。选择 **Grouped by space** 后，
 同一台机器上「学习·anki」和「学习·阅读」里的 Agent 归入「学习」组，行内显示短名。
 宽栏内可拖动组标题到同机器另一组标题的上半区或下半区，调整整组空间的顺序。没有 Agent
 的同组空间也会随组移动，空间名称不变。Pinned、Priority 和窄栏没有这个拖动操作。
+Grouped 中有多台机器的 Agent 时，会在各机器块上方显示淡色标题，顺序与 Spaces 一致。
+布局有 `spaces` 块时，宽栏 Agents 标题旁的按钮可以显示或隐藏 Spaces，Herdr 会记住
+显示状态。也可以在 `keys.json` 的 `global` 中绑定 `layout.toggle:spaces`，
+推荐 macOS 用 `Cmd+Shift+S`，Windows 用 `Ctrl+Shift+S`。
 折叠后若有 Agent 或已知子 Agent 新进入 Done 或 Blocked，标题会多一个小点，展开后清除。
 折叠和状态记录仅保存在当前客户端。安装时复制 `mods/agent-groups`，在克隆布局里把
 `"mod": "agents"` 改为 `"mod": "agent-groups"`。卸载时恢复原引用或切回 `main`，
