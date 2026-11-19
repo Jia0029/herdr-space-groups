@@ -5,6 +5,12 @@ Each machine gets its own groups. A folded group shows its member count, its
 highest-priority agent status, and a highlight if it contains the selected
 space. Fold state is kept locally by Herdr for this mod copy.
 
+![Spaces sidebar with one expanded group and one folded group](preview.png)
+
+## Status
+
+This is a personal project with no maintenance guarantee, and issues are welcome.
+
 ## Naming
 
 Name a space `Study·anki` to display `anki` under `Study`. The first middle dot
@@ -51,8 +57,10 @@ within about two seconds.
 
 ## Install
 
-1. Locate the app home. On macOS the default is `~/.config/herdr-app`. On
-   Windows, see **Home** in the output of `herdr-app --help`.
+1. Locate the app home. The defaults are `~/.config/herdr-app` on macOS and
+   `%USERPROFILE%\.config\herdr-app` on Windows. On Windows, if Herdr is
+   missing from `PATH`, use the full path to `herdr-app.exe` in your Herdr
+   installation directory.
 2. Copy this project's `mods/space-groups` directory into the app home's
    `mods` directory. If you have a Git checkout, copy that same subdirectory
    from the checkout. The result should be `<app home>/mods/space-groups/main.js`.
@@ -74,7 +82,10 @@ Switch the window back to the `main` layout. Remove the
 `<app home>/mods/space-groups` directory and, if you no longer use the cloned
 layout, `<app home>/layouts/main-groups.json`.
 
-## Known limits
+## Compatibility and known limits
+
+Tested on Herdr 0.1.15 (macOS) and 0.1.16 (Windows). macOS validation used
+the mod checker. Windows validation used the desktop client.
 
 - The narrow rail uses the original numbered cells and per-space status
   glyphs. Group drops are available in the expanded sidebar. Machine
@@ -87,8 +98,6 @@ layout, `<app home>/layouts/main-groups.json`.
 - This is a copy of the Spaces mod shipped with Herdr 0.1.15. Herdr upgrades
   do not merge fixes into this mod automatically. The mod uses the shipped
   `menu` overlay and `workspace-chrome` icons.
-- Preview screenshot pending client-side acceptance. This is the placeholder
-  for `preview.png`.
 
 ## Development
 
@@ -113,3 +122,8 @@ Licensed under Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 自动命名的空间拖入组后会变为手动命名。拖动组标题可移动全组。拖动时，展开的机器块会显示
 置顶和置底区域，机器标题也可置顶。单个空间放到首尾会去掉首个前缀（空显示名除外），
 整组放到首尾保留名称和成员顺序。窄栏不显示放置区。
+
+Windows 的 Herdr 主目录默认为 `%USERPROFILE%\.config\herdr-app`。如果命令不在
+`PATH` 中，可以使用 Herdr 安装目录下 `herdr-app.exe` 的完整路径。
+已在 Herdr 0.1.15（macOS 静态检查）和 0.1.16（Windows 桌面端）验证。
+这是个人项目，欢迎反馈问题，维护无保证。
