@@ -1,0 +1,9 @@
+space-groups
+
+This mod is adapted from the built-in spaces mod in Herdr 0.1.15.
+Upstream: https://github.com/herdrdev/herdr-app
+Upstream license: Apache License, Version 2.0.
+
+This adaptation adds per-machine name-prefix groups, local fold state,
+collapsed-group status and selection, and group-scoped worktree nesting.
+See LICENSE for the license text.
