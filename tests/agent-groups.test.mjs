@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { groupAgents, hasNewAttention, splitName, toggleGroupFold, trackAgentState } from "../mods/agent-groups/agentgroups.js";
+import { exceedsDragThreshold, groupAgents, groupMoveApplied, hasNewAttention, planGroupMove, rowPlacement, splitName, toggleGroupFold, trackAgentState } from "../mods/agent-groups/agentgroups.js";
 
 const space = (id, name, { machine = null, named = true } = {}) => ({ id, name, machine, named });
 const agent = (address, s) => ({ address, space: s.id, space_name: s.name });
@@ -96,4 +96,72 @@ test("打开会清除折叠时间，重折叠重新计时，JSON 读回保留新
   const refold = toggleGroupFold(open, key, 25);
   assert.equal(refold.get(key), 25);
   assert.equal(hasNewAttention(["a"], changed, refold.get(key)), false);
+});
+
+const prefix = (label, machine = null) => `prefix-${JSON.stringify([machine, label])}`;
+
+function replayGroupMove(spaces, plan, expectedIds) {
+  const result = [...spaces];
+  for (const args of plan.commands) {
+    assert.deepEqual(Object.keys(args).sort(), ["id", "index"]);
+    assert.ok(args.index >= 1 && args.index <= result.length);
+    const from = result.findIndex((s) => s.id === args.id);
+    assert.notEqual(from, -1);
+    result.splice(args.index - 1, 0, result.splice(from, 1)[0]);
+  }
+  assert.deepEqual(result.map((s) => s.id), expectedIds);
+  assert.equal(groupMoveApplied(result, plan.expected), true);
+  assert.deepEqual(new Map(result.map((s) => [s.id, s.name])), new Map(spaces.map((s) => [s.id, s.name])));
+  return result;
+}
+
+test("Agents 前缀组移到首组之前，同时移动没有 Agent 的同前缀空间", () => {
+  const spaces = [space("b", "B·b"), space("a1", "A·active"), space("gap", "间隔"), space("a2", "A·no-agent")];
+  const listed = [agent("b", spaces[0]), agent("a", spaces[1])];
+  const [first, source] = groupAgents(listed, index(...spaces));
+  const plan = planGroupMove(spaces, source.id, first.id, "before");
+  assert.deepEqual(plan.commands, [{ id: "a1", index: 1 }, { id: "a2", index: 2 }]);
+  const order = replayGroupMove(spaces, plan, ["a1", "a2", "b", "gap"]);
+  const bySpace = new Map(listed.map((a) => [a.space, a]));
+  const readback = groupAgents(order.map((s) => bySpace.get(s.id)).filter(Boolean), index(...order));
+  assert.deepEqual(readback.map((g) => g.label), ["A", "B"]);
+});
+
+test("Agents 前缀组移到末组之后，以末组无 Agent 的成员作为锚点", () => {
+  const host = "local-mac";
+  const spaces = [
+    space("local", "本机"), space("a1", "A·one", { machine: host }),
+    space("b1", "B·with-agent", { machine: host }), space("a2", "A·two", { machine: host }),
+    space("b2", "B·no-agent", { machine: host }), space("remote", "其他机器", { machine: "windows" }),
+  ];
+  const plan = planGroupMove(spaces, prefix("A", host), prefix("B", host), "after");
+  assert.deepEqual(plan.commands, [{ id: "a2", index: 5 }, { id: "a1", index: 4 }]);
+  assert.equal(plan.expected.anchor, "b2");
+  const result = replayGroupMove(spaces, plan, ["local", "b1", "b2", "a1", "a2", "remote"]);
+  assert.deepEqual(planGroupMove(result, prefix("A", host), prefix("B", host), "after").commands, []);
+});
+
+test("Agents 的无前缀单空间组可移动，自动名称和前缀组都保持原状", () => {
+  const spots = [space("p", "A·auto", { named: false }), space("a1", "A·1"), space("a2", "A·2")];
+  const plan = planGroupMove(spots, "sp-p", prefix("A"), "after");
+  assert.deepEqual(plan.commands, [{ id: "p", index: 3 }]);
+  const result = replayGroupMove(spots, plan, ["a1", "a2", "p"]);
+  assert.equal(result[2].named, false);
+});
+
+test("Agents 跨机器、拖到自身或不可拖动的分区均没有移动计划", () => {
+  const spots = [space("a", "A·a"), space("b", "A·b", { machine: "remote" })];
+  assert.equal(planGroupMove(spots, prefix("A"), prefix("A", "remote"), "after"), null);
+  assert.equal(planGroupMove(spots, prefix("A"), prefix("A"), "before"), null);
+  assert.equal(planGroupMove(spots, "pinned", prefix("A"), "after"), null);
+  assert.equal(planGroupMove(spots, prefix("A"), "sec-4", "before"), null);
+});
+
+test("Agents 拖动阈值和半区与 Spaces 一致", () => {
+  const start = { x: 0, y: 0 };
+  assert.equal(exceedsDragThreshold(start, { x: -4, y: 4 }), false);
+  assert.equal(exceedsDragThreshold(start, { x: 0, y: 5 }), true);
+  assert.equal(rowPlacement({ local_position: { y: 14 }, bounds: { height: 30 } }), "before");
+  assert.equal(rowPlacement({ local_position: { y: 15 }, bounds: { height: 30 } }), "after");
+  assert.equal(rowPlacement({}), undefined);
 });

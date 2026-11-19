@@ -44,10 +44,10 @@ insertion line shows where the space or group will move.
   Their names stay the same. Drop on another heading to place the group
   before its first member or after its last member. Press and release on
   the same heading to fold it, or on the same space to select it.
-- While dragging, use **Move to top** or **Move to end** in an expanded
-  machine section to place a space or group at that section's edge.
-  The machine heading also accepts drops at the top. A grouped space
-  dropped there loses its first prefix if its display name is nonempty.
+- While dragging, **Move to end** appears below the source machine's
+  spaces. If the sidebar shows machine headings, drop on the source
+  machine's heading to move to the top. A grouped space dropped at either
+  target loses its first prefix if its display name is nonempty.
   An automatic name stays automatic. A whole group keeps its names and
   member order. This works even when every space has a prefix.
 
@@ -122,6 +122,13 @@ and **reading** on the agent rows. Automatic and unprefixed space names
 keep one group per space. Priority, pinned agents, sub-agent trees,
 remote machine labels and the compact rail work as in the built-in panel.
 
+In the wide **Grouped by space** view, drag a group heading to another
+heading on the same machine. The upper half inserts before the target
+group and the lower half inserts after it. This moves all spaces in the
+source group, including those without agents, and preserves their names.
+The new order also appears in Spaces. Pinned and Priority groups and the
+compact rail keep their existing controls.
+
 Fold a group to keep its status summary visible. A separate accent dot
 appears if an agent or a visible member's known descendant becomes
 **Done** or **Blocked** after the fold and still has that status.
@@ -144,8 +151,8 @@ Desktop interaction testing is pending. Upstream fixes require a manual update.
 折叠仅保存在当前客户端。窄栏继续使用数字入口。安装时复制 mod 并使用克隆布局。
 宽栏可在同一机器内拖动。拖入其他组会换前缀，拖到未分组空间上会去掉首个前缀，
 指针在目标空间行的上半区时插到该行之前，下半区时插到该行之后。
-自动命名的空间拖入组后会变为手动命名。拖动组标题可移动全组。拖动时，展开的机器块会显示
-置顶和置底区域，机器标题也可置顶。单个空间放到首尾会去掉首个前缀（空显示名除外），
+自动命名的空间拖入组后会变为手动命名。拖动组标题可移动全组。拖动时仅来源机器显示置底区。
+列表有机器标题时可拖到来源机器标题置顶。单个空间放到首尾会去掉首个前缀（空显示名除外），
 整组放到首尾保留名称和成员顺序。窄栏不显示放置区。
 
 Windows 的 Herdr 主目录默认为 `%USERPROFILE%\.config\herdr-app`。如果命令不在
@@ -155,6 +162,8 @@ Windows 的 Herdr 主目录默认为 `%USERPROFILE%\.config\herdr-app`。如果�
 
 可选的 `agent-groups` 替换下方 Agents 面板。选择 **Grouped by space** 后，
 同一台机器上「学习·anki」和「学习·阅读」里的 Agent 归入「学习」组，行内显示短名。
+宽栏内可拖动组标题到同机器另一组标题的上半区或下半区，调整整组空间的顺序。没有 Agent
+的同组空间也会随组移动，空间名称不变。Pinned、Priority 和窄栏没有这个拖动操作。
 折叠后若有 Agent 或已知子 Agent 新进入 Done 或 Blocked，标题会多一个小点，展开后清除。
 折叠和状态记录仅保存在当前客户端。安装时复制 `mods/agent-groups`，在克隆布局里把
 `"mod": "agents"` 改为 `"mod": "agent-groups"`。卸载时恢复原引用或切回 `main`，

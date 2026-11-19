@@ -7,8 +7,8 @@
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout } from "herdr";
-import { groupAgents, hasNewAttention, splitName, toggleGroupFold, trackAgentState } from "./agentgroups.js";
+import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, notify } from "herdr";
+import { exceedsDragThreshold, groupAgents, groupMoveApplied, hasNewAttention, planGroupMove, rowPlacement, splitName, toggleGroupFold, trackAgentState } from "./agentgroups.js";
 
 const SORT_KEY = "agent-groups.sort";
 const FOLDED_KEY = "agent-groups.folded";
@@ -89,6 +89,7 @@ export default class Agents extends View {
     if (props()?.sortMenu) return;
     this.folded = new Set();
     this.foldedAt = new Map(JSON.parse(localStorage.getItem(FOLDED_KEY) ?? "[]"));
+    this.drag = null;
     // Each agent's last state and when it changed (ms), kept across restarts.
     this.changed = JSON.parse(localStorage.getItem("changed") ?? "{}");
     this.pendingPins = JSON.parse(localStorage.getItem("pins") ?? "[]");
@@ -138,6 +139,72 @@ export default class Agents extends View {
 
   rank(a) {
     return RANK[a.status] ?? 0;
+  }
+
+  foldGroup(id) {
+    this.foldedAt = toggleGroupFold(this.foldedAt, id, Date.now());
+    localStorage.setItem(FOLDED_KEY, JSON.stringify([...this.foldedAt]));
+  }
+
+  trackGroupDrag(el, id) {
+    return el
+      .on_mouse_down("left", (e) => {
+        this.drag = { id, start: e.position, moved: false, over: null };
+      })
+      .on_mouse_move((e, cx) => {
+        if (!this.drag) return;
+        cx.stop_propagation();
+        this.moveGroupDrag(e, cx, id);
+      })
+      .on_mouse_up("left", (e, cx) => this.finishGroupDrag(e, cx, id));
+  }
+
+  moveGroupDrag(e, cx, id) {
+    const drag = this.drag;
+    if (!drag) return;
+    const wasMoving = drag.moved;
+    drag.moved ||= exceedsDragThreshold(drag.start, e.position);
+    if (!drag.moved) return;
+    const placement = id ? rowPlacement(e) : undefined;
+    if (drag.over?.id === id && drag.over?.placement === placement) return;
+    const plan = placement && planGroupMove(spaces(), drag.id, id, placement);
+    if (wasMoving && !drag.over && !plan) return;
+    drag.over = plan ? { id, placement } : null;
+    cx.notify();
+  }
+
+  finishGroupDrag(e, cx, id) {
+    const drag = this.drag;
+    if (!drag) return;
+    this.drag = null;
+    cx.stop_propagation();
+    cx.notify();
+    const moved = drag.moved || exceedsDragThreshold(drag.start, e.position);
+    if (!moved) {
+      if (drag.id === id) this.foldGroup(id);
+      return;
+    }
+    const placement = drag.over?.id === id ? drag.over.placement : rowPlacement(e);
+    const plan = planGroupMove(spaces(), drag.id, id, placement);
+    if (!plan?.commands.length) return;
+    for (const args of plan.commands) run("space.move", args);
+    this.verifyGroupMove(plan.expected, Date.now() + 2000, cx);
+  }
+
+  cancelGroupDrag(cx) {
+    if (!this.drag) return;
+    this.drag = null;
+    cx.notify();
+  }
+
+  verifyGroupMove(expected, deadline, cx) {
+    if (groupMoveApplied(spaces(), expected)) return;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      notify({ title: "Group move failed", body: "The new space order was not confirmed.", level: "error" });
+      return;
+    }
+    cx.timer.after(Math.min(100, remaining), (cx) => this.verifyGroupMove(expected, deadline, cx));
   }
 
   sortMenu(t) {
@@ -403,6 +470,8 @@ export default class Agents extends View {
     const header = (g) => {
       const foldedAt = this.foldedAt.get(g.id);
       const open = foldedAt === undefined;
+      const draggable = !byPriority && g.id !== "pinned";
+      const placement = draggable && this.drag?.over?.id === g.id ? this.drag.over.placement : null;
       const hasNews = !open && hasNewAttention(
         g.members.flatMap((a) => [a.address, ...kids.get(a.address).map(({ t }) => t.address)]),
         this.changed, foldedAt,
@@ -410,6 +479,7 @@ export default class Agents extends View {
       const top = g.members.reduce((m, a) => ((RANK[a.status] ?? 0) > (RANK[m] ?? 0) ? a.status : m), null);
       return h_flex()
         .id(g.id)
+        .relative()
         .px(8)
         .pt(8)
         .h(30)
@@ -419,12 +489,16 @@ export default class Agents extends View {
         .text_size(11)
         .font_semibold()
         .cursor_pointer()
-        .hover((s) => s.text_color(t.foreground))
-        .on_click((_e, cx) => {
-          this.foldedAt = toggleGroupFold(this.foldedAt, g.id, Date.now());
-          localStorage.setItem(FOLDED_KEY, JSON.stringify([...this.foldedAt]));
+        .when(!this.drag?.moved, (el) => el.hover((s) => s.text_color(t.foreground)))
+        .when(!draggable, (el) => el.on_click((_e, cx) => {
+          this.foldGroup(g.id);
           cx.notify();
-        })
+        }))
+        .when(draggable, (el) => this.trackGroupDrag(el, g.id))
+        .when(draggable && this.drag?.moved && this.drag.id === g.id, (el) => el.opacity(0.5))
+        .when(Boolean(placement), (el) => el.child(div().absolute().left(0).right(0).h(2).bg(t.accent)
+          .when(placement === "before", (line) => line.top(0))
+          .when(placement === "after", (line) => line.bottom(0))))
         .child(svg(`mods/workspace-chrome/chevron-${open ? "down" : "right"}.svg`).size(11).flex_none().text_color(t.dim))
         .child(div().flex_1().min_w(0).truncate().text_color(t[g.status] ?? t.dim).child(g.label))
         .when(byPriority || !open, (el) => el.child(div().flex_none().text_color(t.dim).child(String(g.members.length))))
@@ -473,7 +547,12 @@ export default class Agents extends View {
       .when(list.length === 0 && !collapsed, (el) =>
         el.child(div().px(12).text_size(12).text_color(t.dim).child("No agent status yet. Agents show up here when they report their status. Older versions and agents inside tmux may not.")),
       )
-      .child(v_flex().id("ag-list").flex_1().min_h(0).px(collapsed ? 0 : 8).overflow_y_scrollbar().mode("always").children(rows))
+      .child(v_flex().id("ag-list").flex_1().min_h(0).px(collapsed ? 0 : 8).overflow_y_scrollbar().mode("always")
+        .on_mouse_move((e, cx) => this.moveGroupDrag(e, cx, null))
+        .on_mouse_up("left", (_e, cx) => this.cancelGroupDrag(cx))
+        .on_mouse_down_out((_e, cx) => this.cancelGroupDrag(cx))
+        .on_hover((inside, cx) => { if (!inside) this.cancelGroupDrag(cx); })
+        .children(rows))
       .when(collapsed, (el) =>
         el.child(
           h_flex()

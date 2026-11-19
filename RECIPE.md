@@ -24,10 +24,9 @@ prefix on a machine. Its rows show the short space name and agent detail.
   14 px of extra left padding. Worktrees have another 22 px and a branch
   icon. Other rows have the built-in 18 px colored avatar. Git details appear
   to the right when relevant.
-- During a drag in the expanded sidebar, unfolded machine sections show
-  18 px dashed **Move to top** and **Move to end** zones. The single-machine
-  list shows the same zones without a machine heading. Valid hover targets
-  use the theme's accent.
+- During a drag in the expanded sidebar, the source machine gets an 18 px
+  dashed **Move to end** zone below its spaces. A machine heading or the
+  end zone uses the theme's accent when it is a valid drop target.
 - Below 160 logical px, the sidebar shows the built-in 32 px wide numbered
   rail cells with machine icons and per-space status glyphs.
 - The optional Agents panel keeps the shipped 41 px toolbar and 30 px agent
@@ -60,8 +59,9 @@ prefix on a machine. Its rows show the short space name and agent detail.
 - Drag and drop works within one machine. Dropping a group on its own
   members does nothing. Herdr shows an error if the resulting name or order
   cannot be confirmed in about two seconds.
-- Drop on either zone to move to the first or last position of that
-  machine's space list. A machine heading acts as a top drop target.
+- Drop on the end zone to move to the last position of the source
+  machine's space list. Where present, the source machine's heading
+  acts as a top drop target.
   At these targets a space loses its first prefix if the display name is
   nonempty, and automatic names stay automatic. Groups keep their names
   and member order. The zones disappear when the drag ends.
@@ -75,6 +75,12 @@ prefix on a machine. Its rows show the short space name and agent detail.
   agents and sub-agent trees retain their behavior. The local accent dot
   appears when a folded group has a new, still-current Done or Blocked
   state. Click the header to open the group and clear its fold time.
+- Drag an Agents group heading in the wide Grouped by space view. Another
+  heading on the same machine shows a line above or below its title
+  according to the pointer's position. All the source group's spaces
+  move together with their names intact. Dropping on itself leaves the
+  group as it was. Pinned and Priority headings and the rail keep their
+  existing behavior.
 
 ## Built from
 
@@ -100,7 +106,7 @@ prefix on a machine. Its rows show the short space name and agent detail.
   Simulate each move before computing the next 1-based index. Use
   `cx.timer.after()` with a short deadline to verify the live name and order,
   and `notify()` for an unconfirmed drop.
-- Route the two edge zones and the machine heading through the same
+- Route the end zone and the machine heading through the same
   `planEdgeDrop()` logic, with `edge: "top"` for the heading. Confirm
   placement at the actual edge of the machine's live space order.
 - Optionally point `sidebar → sidebar-lists → agents` at `agent-groups`,
@@ -109,6 +115,10 @@ prefix on a machine. Its rows show the short space name and agent detail.
   Group by the machine and parsed prefix from `spaces()`; use `agents()`
   and the live sub-agent tree from `terminals()` to observe changes.
   Group fold times are stored at `agent-groups.folded` in local storage.
+- For an Agents group move, use `spaces()` to resolve every member of
+  the source and target groups. Simulate the resulting 1-based
+  `space.move` indexes and read back the resulting space order.
+  `agents()` follows space order, so the panel uses the resulting order.
 
 ## Watch out
 
@@ -144,10 +154,12 @@ prefix on a machine. Its rows show the short space name and agent detail.
 - A same-group worktree nests beneath its repo and displays its Git details.
 - Narrowing the sidebar reveals the rail entries even for folded groups.
   Widening it restores the folds.
-- A fully grouped machine can accept a space at either list edge. A group
-  can move intact to either edge. The machine heading acts as the top
-  zone. Folded machine sections and the rail show no edge zones.
+- A fully grouped machine can accept a space at its end zone or machine
+  heading. A group can move intact to the same targets. The end zone
+  appears only under the source machine's spaces in the expanded sidebar.
 - Agents in two same-prefix spaces appear under one heading with distinct
   short labels, and a same-prefix space on another machine stays separate.
   A folded Agents group shows a dot for a new Done or Blocked state, clears
   on open, and keeps its fold when the client is reopened.
+- Reordering a grouped Agents heading updates Spaces in the same order.
+  The move includes spaces without agents and keeps all space names.

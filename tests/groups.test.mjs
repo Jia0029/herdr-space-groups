@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { dropApplied, exceedsDragThreshold, groupRows, nestWorktrees, planDrop, planEdgeDrop, releaseAction, rowPlacement, splitName } from "../mods/space-groups/groups.js";
+import { dropApplied, endDropTarget, exceedsDragThreshold, groupRows, nestWorktrees, planDrop, planEdgeDrop, releaseAction, rowPlacement, splitName } from "../mods/space-groups/groups.js";
 
 function row(id, name, options = {}) {
   const { machine = null, named = true, g = null, status = null, active = false } = options;
@@ -345,4 +345,13 @@ test("目标行的中点属于下半区，缺少有效边界时交给方向规�
   assert.equal(at(27), "after");
   assert.equal(rowPlacement({}), undefined);
   assert.equal(rowPlacement({ local_position: { y: 0 }, bounds: { height: 0 } }), undefined);
+});
+
+test("拖动时仅来源机器有末尾放置区，单机也只生成 end", () => {
+  const machines = [null, "mac-mini", "windows"];
+  for (const source of machines) {
+    const targets = machines.map((machine) => endDropTarget(source, machine)).filter(Boolean);
+    assert.deepEqual(targets, [{ kind: "edge", machine: source, edge: "end" }]);
+  }
+  assert.equal(endDropTarget(undefined, null), null);
 });

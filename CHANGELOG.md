@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1
+
+- Show only the source machine's end drop zone in Spaces. A machine
+  heading still accepts drops at the top.
+- Drag a group heading in the grouped Agents view to reorder its spaces
+  on the same machine while keeping their names.
+
 ## 0.3.0
 
 - Add the optional `agent-groups` mod for the Agents sidebar. Grouped by

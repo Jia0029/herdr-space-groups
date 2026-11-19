@@ -32,6 +32,10 @@ export function splitName(space) {
 const machineOf = (space) => space.machine ?? null;
 const groupKey = (space, group) => JSON.stringify([machineOf(space), group]);
 
+export function endDropTarget(sourceMachine, machine) {
+  return sourceMachine === machine ? { kind: "edge", machine, edge: "end" } : null;
+}
+
 function dropMembers(spaces, item) {
   if (item.kind === "space") return spaces.filter((space) => space.id === item.id);
   return spaces.filter((space) => groupKey(space, splitName(space).group) === item.id);
