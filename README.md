@@ -139,7 +139,8 @@ Licensed under Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 `agent-groups` is an optional replacement for Herdr's Agents panel. Select
 **Grouped by space** in the sort menu. On each machine, agents from
 `Study·anki` and `Study·reading` share a **Study** heading, with **anki**
-and **reading** on the agent rows. Automatic and unprefixed space names
+and **reading** on the agent rows. These rows show details when a space has
+multiple top-level agent rows in the group. Automatic and unprefixed space names
 keep one group per space. Priority, pinned agents, sub-agent trees,
 remote machine labels and the compact rail work as in the built-in panel.
 
@@ -150,10 +151,10 @@ source group, including those without agents, and preserves their names.
 The new order also appears in Spaces. Pinned and Priority groups and the
 compact rail keep their existing controls.
 
-When the grouped list contains agents from multiple machines, muted machine
-headings separate their groups in the order saved by Spaces. The Agents
-machine headings are labels. Use the machine headings in Spaces to reorder
-machines.
+When the wide grouped list contains agents from multiple machines, each
+machine heading and its groups sit inside a rounded border, in the order
+saved by Spaces. The heading identifies the machine for the rows inside.
+Use the machine headings in Spaces to reorder machines.
 
 The wide Agents toolbar has a **Show/hide Spaces** button when the layout
 contains a `spaces` block. Herdr remembers that block's visibility.
@@ -200,9 +201,11 @@ Windows 的 Herdr 主目录默认为 `%USERPROFILE%\.config\herdr-app`。如果�
 
 可选的 `agent-groups` 替换下方 Agents 面板。选择 **Grouped by space** 后，
 同一台机器上「学习·anki」和「学习·阅读」里的 Agent 归入「学习」组，行内显示短名。
+同一空间在组内有多条顶层 Agent 行时，保留副标题以便区分。
 宽栏内可拖动组标题到同机器另一组标题的上半区或下半区，调整整组空间的顺序。没有 Agent
 的同组空间也会随组移动，空间名称不变。Pinned、Priority 和窄栏没有这个拖动操作。
-Grouped 中有多台机器的 Agent 时，会在各机器块上方显示淡色标题，顺序与 Spaces 一致。
+宽栏 Grouped 视图有多台机器的 Agent 时，各机器的标题与分组一起显示在圆角框内，
+框内顶层 Agent 行由标题标识所属机器，顺序与 Spaces 一致。
 布局有 `spaces` 块时，宽栏 Agents 标题旁的按钮可以显示或隐藏 Spaces，Herdr 会记住
 显示状态。也可以在 `keys.json` 的 `global` 中绑定 `layout.toggle:spaces`，
 推荐 macOS 用 `Cmd+Shift+S`，Windows 用 `Ctrl+Shift+S`。

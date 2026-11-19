@@ -67,6 +67,16 @@ export function groupAgents(agents, spaceById) {
   return [...groups.values()];
 }
 
+export function spacesWithMultipleAgents(agents) {
+  const seen = new Set();
+  const repeated = new Set();
+  for (const { space } of agents) {
+    if (seen.has(space)) repeated.add(space);
+    seen.add(space);
+  }
+  return repeated;
+}
+
 // Keep the threshold, row halves and simulated move indexes consistent with
 // space-groups/groups.js. These moves preserve names and use group headers.
 export function exceedsDragThreshold(start, position) {

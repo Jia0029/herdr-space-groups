@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.3
+
+- Use short space names in Grouped prefix rows, with details when a space
+  has multiple top-level agent rows. Let each machine frame identify its
+  machine for the rows inside.
+
+## 0.5.2
+
+- Frame each machine's groups and heading in the wide Grouped Agents view
+  when agents are listed on multiple machines.
+
 ## 0.5.1
 
 - Add a Spaces toggle to the wide Agents toolbar. Its chevron points up to

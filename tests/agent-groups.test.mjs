@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { exceedsDragThreshold, groupAgents, groupMoveApplied, hasNewAttention, machineSections, orderMachines, planGroupMove, rowPlacement, splitName, toggleGroupFold, trackAgentState } from "../mods/agent-groups/agentgroups.js";
+import { exceedsDragThreshold, groupAgents, groupMoveApplied, hasNewAttention, machineSections, orderMachines, planGroupMove, rowPlacement, spacesWithMultipleAgents, splitName, toggleGroupFold, trackAgentState } from "../mods/agent-groups/agentgroups.js";
 import { orderMachines as orderSpaceMachines } from "../mods/space-groups/groups.js";
 
 const space = (id, name, { machine = null, named = true } = {}) => ({ id, name, machine, named });
@@ -56,6 +56,15 @@ test("Agents 短名只切掉第一段前缀，保留后续中点并去除外侧�
   const empty = space("empty", " · ");
   assert.deepEqual(splitName(empty), { group: "", label: "" });
   assert.equal(groupAgents([agent("t", empty)], index(empty))[0].label, "(empty group)");
+});
+
+test("Agents 只为有多条顶层行的同一空间保留副标题", () => {
+  const first = space("s1", "学习·anki");
+  const sameName = space("s2", first.name);
+  const remote = space("remote/s1", first.name, { machine: "remote" });
+  const rows = [agent("a", first), agent("b", sameName), agent("remote/c", remote)];
+  assert.deepEqual(spacesWithMultipleAgents(rows), new Set());
+  assert.deepEqual(spacesWithMultipleAgents([...rows, agent("d", first), agent("e", first)]), new Set(["s1"]));
 });
 
 test("折叠后变 done 或 blocked 时显示小点，子 Agent 也纳入判断", () => {

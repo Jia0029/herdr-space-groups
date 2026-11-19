@@ -8,7 +8,7 @@
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, notify } from "herdr";
-import { exceedsDragThreshold, groupAgents, groupMoveApplied, hasNewAttention, machineSections, MACHINE_ORDER_KEY, planGroupMove, rowPlacement, splitName, toggleGroupFold, trackAgentState } from "./agentgroups.js";
+import { exceedsDragThreshold, groupAgents, groupMoveApplied, hasNewAttention, machineSections, MACHINE_ORDER_KEY, planGroupMove, rowPlacement, spacesWithMultipleAgents, splitName, toggleGroupFold, trackAgentState } from "./agentgroups.js";
 
 const SORT_KEY = "agent-groups.sort";
 const FOLDED_KEY = "agent-groups.folded";
@@ -367,6 +367,9 @@ export default class Agents extends View {
     const leads = leadPanes(panes());
     const spaceList = spaces();
     const spaceById = new Map(spaceList.map((s) => [s.id, s]));
+    const grouped = !byPriority && !collapsed;
+    const sections = grouped ? machineSections(groupAgents(rest, spaceById), shared(MACHINE_ORDER_KEY)) : [];
+    const repeatedSpaces = grouped ? spacesWithMultipleAgents(rest) : new Set();
     const tabs = new Map(spaceList.flatMap(s => s.tabs).map(tab => [tab.id, tab]));
     const labels = new Map(list.map(a => {
       const tab = tabs.get(a.tab);
@@ -425,7 +428,8 @@ export default class Agents extends View {
       const full = byPriority || isPinned || prefixRow;
       const agentName = more ?? (/^\d+$/.test(label(a)) ? a.program?.name || label(a) : label(a));
       const name = prefixRow ? spaceName.label : full ? a.space_name || label(a) : agentName;
-      const secondary = prefixRow ? agentName : more;
+      const secondary = prefixRow ? (repeatedSpaces.has(a.space) ? agentName : null) : more;
+      const showMachine = Boolean(machine) && (isPinned || sections.length <= 1);
       return h_flex()
         .id(`ag-${a.address}`)
         .px(8)
@@ -452,7 +456,7 @@ export default class Agents extends View {
         .child(h_flex().flex_1().min_w(0).gap(5).items_center()
           .child(div().min_w(0).max_w(full && secondary ? 120 : 200).truncate().text_color(idle ? t.muted : t.foreground).child(name))
           .when(full && Boolean(secondary), el => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(name ? `\u00b7 ${secondary}` : secondary))))
-        .when(Boolean(machine), el => el.child(div().text_size(10).text_color(t.dim).child(machine)))
+        .when(showMachine, el => el.child(div().text_size(10).text_color(t.dim).child(machine)))
         .when(subs.length > 0, el => el.child(fold(a, subs)))
         .when(this.hovered === a.address, el => el.child(pin))
         .when(this.hovered !== a.address && Boolean(when), el => el.child(div().flex_none().text_size(11).text_color(t.dim).child(duration(now - when))))
@@ -460,8 +464,8 @@ export default class Agents extends View {
     };
 
     // A prefix group stays at its first agent even if its spaces are interleaved.
-    const groups = pinned.length ? [{ id: "pinned", label: "Pinned", status: null, members: pinned }] : [];
-    const machineTitles = new Map();
+    const pinnedGroup = pinned.length ? { id: "pinned", label: "Pinned", status: null, members: pinned } : null;
+    const groups = pinnedGroup ? [pinnedGroup] : [];
     if (byPriority) {
       for (const a of rest) {
         const r = rankOf(a) || RANK.idle;
@@ -469,12 +473,8 @@ export default class Agents extends View {
         if (groups.at(-1)?.id === id) groups.at(-1).members.push(a);
         else groups.push({ id, label: SECTION[r], status: SECTION_STATUS[r], members: [a] });
       }
-    } else if (!collapsed) {
-      const sections = machineSections(groupAgents(rest, spaceById), shared(MACHINE_ORDER_KEY));
-      for (const [i, section] of sections.entries()) {
-        if (section.title) machineTitles.set(section.groups[0].id, { ...section, divided: i > 0 });
-        groups.push(...section.groups);
-      }
+    } else {
+      for (const section of sections) groups.push(...section.groups);
     }
     setAgentOrder((collapsed ? list : groups.flatMap((g) => g.members)).map((a) => a.address));
 
@@ -518,19 +518,28 @@ export default class Agents extends View {
           .when(hasNews, (el) => el.child(div().size(6).flex_none().rounded(3).bg(t.accent)))
           .when(!byPriority && top && top !== "idle", (el) => el.child(this.status(t, { status: top }, true))));
     };
-    const rows = collapsed
-      ? list.flatMap(withKids)
-      : groups.flatMap((g, i) => {
-        const machine = machineTitles.get(g.id);
-        const items = [];
-        if (machine?.divided) items.push(div().w_full().h(1).flex_none().mt(8).mb(4).bg(t.border));
-        if (machine) items.push(div().id(`agent-machine-${JSON.stringify(machine.machine)}`)
-          .h(22).flex_none().px(8).pt(5).truncate().text_size(10.5).text_color(t.muted).child(machine.title));
-        if (i > 0 && !machine?.divided) items.push(div().h(1).flex_none().mt(5).mx(8).bg(t.border));
-        items.push(header(g));
-        if (!this.foldedAt.has(g.id)) items.push(...g.members.flatMap(withKids));
-        return items;
-      });
+    const groupRows = (g, i) => {
+      const items = [];
+      if (i > 0) items.push(div().h(1).flex_none().mt(5).mx(8).bg(t.border));
+      items.push(header(g));
+      if (!this.foldedAt.has(g.id)) items.push(...g.members.flatMap(withKids));
+      return items;
+    };
+    const machineBox = (section, i) => v_flex()
+      .id(`agent-machine-${JSON.stringify(section.machine)}`)
+      .w_full().flex_none().p(4).border(1).border_color(t.border).rounded(8)
+      .when(i > 0 || Boolean(pinnedGroup), el => el.mt(8))
+      .child(div().h(22).flex_none().px(8).pt(5).truncate().text_size(10.5).text_color(t.muted).child(section.title))
+      .children(section.groups.flatMap(groupRows));
+
+    let rows;
+    if (collapsed) {
+      rows = list.flatMap(withKids);
+    } else if (sections.length > 1) {
+      rows = [...(pinnedGroup ? groupRows(pinnedGroup, 0) : []), ...sections.map(machineBox)];
+    } else {
+      rows = groups.flatMap(groupRows);
+    }
 
     return v_flex()
       .size_full()
