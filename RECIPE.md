@@ -7,6 +7,9 @@ attention.
 
 ![Space Groups](preview.png)
 
+The optional Agents panel below it groups agents from the same named-space
+prefix on a machine. Its rows show the short space name and agent detail.
+
 ## What you see
 
 - A theme-colored sidebar starts with the existing 31 px Spaces toolbar and
@@ -27,6 +30,9 @@ attention.
   use the theme's accent.
 - Below 160 logical px, the sidebar shows the built-in 32 px wide numbered
   rail cells with machine icons and per-space status glyphs.
+- The optional Agents panel keeps the shipped 41 px toolbar and 30 px agent
+  rows. A folded Agents header can show a separate 6 px accent dot next
+  to its status summary.
 
 ## How it behaves
 
@@ -64,6 +70,11 @@ attention.
   fold their entire machine in both widths. Widening the sidebar restores
   the previous prefix folds. Group drops are available in the expanded
   sidebar. Existing Herdr shortcuts still work.
+- In Agents, the sort menu switches between Priority and Grouped by space.
+  The latter merges named-space prefixes within each machine. Pinned
+  agents and sub-agent trees retain their behavior. The local accent dot
+  appears when a folded group has a new, still-current Done or Blocked
+  state. Click the header to open the group and clear its fold time.
 
 ## Built from
 
@@ -92,6 +103,12 @@ attention.
 - Route the two edge zones and the machine heading through the same
   `planEdgeDrop()` logic, with `edge: "top"` for the heading. Confirm
   placement at the actual edge of the machine's live space order.
+- Optionally point `sidebar → sidebar-lists → agents` at `agent-groups`,
+  a standalone copy of the Herdr 0.1.15 Agents mod. Its sort popup uses
+  the same mod with `{sortMenu: true}` and writes `agent-groups.sort`.
+  Group by the machine and parsed prefix from `spaces()`; use `agents()`
+  and the live sub-agent tree from `terminals()` to observe changes.
+  Group fold times are stored at `agent-groups.folded` in local storage.
 
 ## Watch out
 
@@ -108,6 +125,11 @@ attention.
 - Machine folding and prefix folding are separate. Never put prefix fold
   state in shared space data. The client needs a Herdr version with the
   shipped menu and icon paths used by the 0.1.15 baseline.
+- Keep the Agents panel's elapsed-time behavior for Done and Idle.
+  Track the actual status separately for the dot, using only the most
+  recent observed transition. A transition while the panel is away is
+  visible only if the panel next observes a different status. Sorting
+  and folds belong to this mod's client.
 
 ## Done when
 
@@ -125,3 +147,7 @@ attention.
 - A fully grouped machine can accept a space at either list edge. A group
   can move intact to either edge. The machine heading acts as the top
   zone. Folded machine sections and the rail show no edge zones.
+- Agents in two same-prefix spaces appear under one heading with distinct
+  short labels, and a same-prefix space on another machine stays separate.
+  A folded Agents group shows a dot for a new Done or Blocked state, clears
+  on open, and keeps its fold when the client is reopened.

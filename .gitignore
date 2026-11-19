@@ -2,6 +2,7 @@
 /.check-home/
 /.check-tmp/
 /mods/space-groups/gpui-kit.d.ts
+/mods/agent-groups/gpui-kit.d.ts
 /REPORT.md
 /REPORT-windows.md
 /snapshots/

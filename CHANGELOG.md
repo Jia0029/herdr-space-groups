@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0
+
+- Add the optional `agent-groups` mod for the Agents sidebar. Grouped by
+  space combines agents from spaces with the same prefix on a machine.
+- Keep Agents group folds on the current client and show an accent dot
+  when an agent becomes done or blocked after the group was folded.
+
 ## 0.2.2
 
 - Use the pointer's position within a space row to insert above or below it.

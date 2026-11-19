@@ -1,9 +1,11 @@
-space-groups
+space-groups and agent-groups
 
-This mod is adapted from the built-in spaces mod in Herdr 0.1.15.
+These mods are adapted from the built-in spaces and agents mods in Herdr 0.1.15.
 Upstream: https://github.com/herdrdev/herdr-app
 Upstream license: Apache License, Version 2.0.
 
-This adaptation adds per-machine name-prefix groups, local fold state,
-collapsed-group status and selection, and group-scoped worktree nesting.
+The space-groups adaptation adds name-prefix groups, local fold state,
+collapsed-group status and selection, group-scoped worktree nesting, and
+drag and drop. The agent-groups adaptation adds per-machine name-prefix
+groups, short space labels, local fold state, and an attention indicator.
 See LICENSE for the license text.

@@ -102,6 +102,7 @@ the mod checker. Windows validation used the desktop client.
 ## Development
 
 Run `herdr-app check ./mods/space-groups` to load and render the mod once.
+Use `herdr-app check ./mods/agent-groups` for the Agents mod.
 Herdr may generate `gpui-kit.d.ts` in the mod directory when checking or
 loading it. The generated declaration is ignored by Git. The pure grouping
 tests use Node.js 22+ and require no dependencies.
@@ -111,6 +112,30 @@ node --test tests/
 ```
 
 Licensed under Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+## Agent Groups
+
+`agent-groups` is an optional replacement for Herdr's Agents panel. Select
+**Grouped by space** in the sort menu. On each machine, agents from
+`Study·anki` and `Study·reading` share a **Study** heading, with **anki**
+and **reading** on the agent rows. Automatic and unprefixed space names
+keep one group per space. Priority, pinned agents, sub-agent trees,
+remote machine labels and the compact rail work as in the built-in panel.
+
+Fold a group to keep its status summary visible. A separate accent dot
+appears if an agent or a visible member's known descendant becomes
+**Done** or **Blocked** after the fold and still has that status.
+Opening the group clears the dot. The current client stores the folds and
+observed status times locally. Changes that occur while the panel is
+closed can only be detected when the panel next sees a different status.
+
+To install, copy `mods/agent-groups` to the app home's `mods` directory,
+then change `"mod": "agents"` to `"mod": "agent-groups"` in your cloned
+layout. This mod can be installed independently of `space-groups`.
+To uninstall, restore `"mod": "agents"` in your layout or switch back to
+`main`, then remove the `mods/agent-groups` folder. The mod is adapted
+from the Agents mod in Herdr 0.1.15 and has passed its macOS mod check.
+Desktop interaction testing is pending. Upstream fixes require a manual update.
 
 ## 中文简述
 
@@ -127,3 +152,10 @@ Windows 的 Herdr 主目录默认为 `%USERPROFILE%\.config\herdr-app`。如果�
 `PATH` 中，可以使用 Herdr 安装目录下 `herdr-app.exe` 的完整路径。
 已在 Herdr 0.1.15（macOS 静态检查）和 0.1.16（Windows 桌面端）验证。
 这是个人项目，欢迎反馈问题，维护无保证。
+
+可选的 `agent-groups` 替换下方 Agents 面板。选择 **Grouped by space** 后，
+同一台机器上「学习·anki」和「学习·阅读」里的 Agent 归入「学习」组，行内显示短名。
+折叠后若有 Agent 或已知子 Agent 新进入 Done 或 Blocked，标题会多一个小点，展开后清除。
+折叠和状态记录仅保存在当前客户端。安装时复制 `mods/agent-groups`，在克隆布局里把
+`"mod": "agents"` 改为 `"mod": "agent-groups"`。卸载时恢复原引用或切回 `main`，
+再移除该 mod 文件夹。此 mod 改写自 Herdr 自带 Agents，上游修复需手动合入。
